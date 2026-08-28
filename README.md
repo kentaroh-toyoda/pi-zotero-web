@@ -1,4 +1,4 @@
-# pi-zotero-ext
+# pi-zotero-web
 
 Zotero integration for [pi](https://pi.dev) via the Zotero Web API.
 
@@ -16,16 +16,17 @@ Zotero integration for [pi](https://pi.dev) via the Zotero Web API.
 
 ## Install
 
-This is a directory-style pi extension. Install it globally so pi auto-discovers it:
+Install the published npm package (writes to `~/.pi/agent/settings.json`):
 
 ```bash
-mkdir -p ~/.pi/agent/extensions
-ln -s "$PWD" ~/.pi/agent/extensions/pi-zotero-ext
+pi install npm:pi-zotero-web
+# or pin a version:
+pi install npm:pi-zotero-web@0.1.1
 ```
 
-(Or copy the directory there.) Then `/reload` inside pi, or restart pi.
+Add `-l` to install into project settings (`.pi/settings.json`) instead of user settings.
 
-Alternatively, test it without installing:
+Alternatively, test it from a checkout without installing:
 
 ```bash
 pi -e ./index.ts
