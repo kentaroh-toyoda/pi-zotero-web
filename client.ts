@@ -234,7 +234,7 @@ export async function createCollections(
 	collections: Array<{ name: string; parentCollection?: string | false }>,
 	signal?: AbortSignal,
 ): Promise<ZoteroCollection[]> {
-	const token = crypto.randomUUID();
+	const token = crypto.randomUUID().replace(/-/g, "");
 	const res = await zoteroFetch(cfg, `${prefix(cfg)}/collections`, {
 		method: "POST",
 		signal,
@@ -364,7 +364,7 @@ export async function createItems(
 	items: Record<string, unknown>[],
 	signal?: AbortSignal,
 ): Promise<ZoteroItem[]> {
-	const token = crypto.randomUUID();
+	const token = crypto.randomUUID().replace(/-/g, "");
 	const res = await zoteroFetch(cfg, `${prefix(cfg)}/items`, {
 		method: "POST",
 		signal,
