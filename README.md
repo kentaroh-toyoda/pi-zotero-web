@@ -21,7 +21,7 @@ Install the published npm package (writes to `~/.pi/agent/settings.json`):
 ```bash
 pi install npm:pi-zotero-web
 # or pin a version:
-pi install npm:pi-zotero-web@0.1.1
+pi install npm:pi-zotero-web@0.1.2
 ```
 
 Add `-l` to install into project settings (`.pi/settings.json`) instead of user settings.
