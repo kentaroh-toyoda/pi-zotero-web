@@ -33,9 +33,21 @@ export async function fetchKeyInfo(key: string, signal?: AbortSignal): Promise<K
 	});
 	if (!res.ok) {
 		const body = await res.text().catch(() => "");
-		throw new Error(`Zotero key check failed (${res.status}): ${body || res.statusText}`);
+		throw new KeyCheckError(res.status, body || res.statusText, key.length);
 	}
 	return (await res.json()) as KeyInfo;
+}
+
+/** Raised when /keys/current rejects a key, with a length diagnostic (no key leaked). */
+export class KeyCheckError extends Error {
+	constructor(readonly status: number, readonly response: string, readonly keyLength: number) {
+		super(
+			`Zotero rejected the API key (HTTP ${status}: ${response.trim() || "Forbidden"}). ` +
+				`You entered ${keyLength} character${keyLength === 1 ? "" : "s"}; a Zotero key is usually ~24 alphanumeric chars. ` +
+				`Re-check the key at https://www.zotero.org/settings/keys (it must have library + file access).`,
+		);
+		this.name = "KeyCheckError";
+	}
 }
 
 function unsupportedStream(): AssistantMessageEventStream {
@@ -85,18 +97,37 @@ export function createZoteroProvider(): Provider<Api> {
 			apiKey: {
 				name: "Zotero API key",
 				async login(interaction: ProviderAuthInteraction): Promise<ApiKeyCredential> {
-					const key = (await interaction.prompt({ type: "secret", message: "Zotero API key" })).trim();
-					if (!key) throw new Error("No API key entered.");
-					interaction.notify({ type: "progress", message: "Verifying key with Zotero…" });
-					const info = await fetchKeyInfo(key, interaction.signal);
-					if (!info.access?.user?.library) {
-						throw new Error("This Zotero API key does not have library access. Re-create it with library/file permissions.");
+					for (let attempt = 1; attempt <= 3; attempt++) {
+						const key = (await interaction.prompt({
+							type: "secret",
+							message: attempt === 1 ? "Zotero API key" : `Zotero API key (attempt ${attempt})`,
+						})).trim();
+						if (!key) throw new Error("No API key entered.");
+						interaction.notify({ type: "progress", message: "Verifying key with Zotero…" });
+						let info: KeyInfo;
+						try {
+							info = await fetchKeyInfo(key, interaction.signal);
+						} catch (err) {
+							if (err instanceof KeyCheckError) {
+								interaction.notify({ type: "info", message: err.message });
+								continue; // retry
+							}
+							throw err;
+						}
+						if (!info.access?.user?.library) {
+							throw new Error(
+								"This Zotero API key does not have library access. Re-create it at https://www.zotero.org/settings/keys with library + file access.",
+							);
+						}
+						return {
+							type: "api_key",
+							key,
+							env: { ZOTERO_USER_ID: String(info.userID) },
+						};
 					}
-					return {
-						type: "api_key",
-						key,
-						env: { ZOTERO_USER_ID: String(info.userID) },
-					};
+					throw new Error(
+						"Zotero API key rejected 3 times. Re-check the key at https://www.zotero.org/settings/keys and run `/login zotero` again.",
+					);
 				},
 				async check({ credential }): Promise<AuthCheck | undefined> {
 					return credential?.key

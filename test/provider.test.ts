@@ -18,9 +18,12 @@ describe("provider.fetchKeyInfo", () => {
 		handle.restore();
 	});
 
-	it("throws on non-ok", async () => {
+	it("throws KeyCheckError on non-ok", async () => {
 		const handle = mockFetch(() => ({ status: 401, body: "Unauthorized" }));
-		await assert.rejects(() => fetchKeyInfo("KEY"), /key check failed/);
+		await assert.rejects(() => fetchKeyInfo("KEY"), (err: unknown) => {
+			assert.match((err as Error).message, /rejected the API key/);
+			return true;
+		});
 		handle.restore();
 	});
 });
@@ -64,6 +67,47 @@ describe("provider.login flow", () => {
 	it("throws when no key is entered", async () => {
 		const provider = createZoteroProvider();
 		await assert.rejects(() => provider.auth.apiKey!.login!(fakeInteraction("   ")), /No API key/);
+	});
+
+	it("retries the key prompt on a 403, then gives up after 3 attempts", async () => {
+		let prompts = 0;
+		const interaction: ProviderAuthInteraction = {
+			signal: new AbortController().signal,
+			async prompt() {
+				prompts++;
+				return "BADKEY";
+			},
+			notify() {},
+		};
+		const handle = mockFetch(() => ({ status: 403, body: "Invalid key" }));
+		const provider = createZoteroProvider();
+		await assert.rejects(() => provider.auth.apiKey!.login!(interaction), /rejected 3 times/);
+		assert.equal(prompts, 3, "should have prompted 3 times before giving up");
+		handle.restore();
+	});
+
+	it("succeeds on a later attempt after initial 403s", async () => {
+		let prompts = 0;
+		let authCalls = 0;
+		const interaction: ProviderAuthInteraction = {
+			signal: new AbortController().signal,
+			async prompt() {
+				prompts++;
+				return prompts === 1 ? "BADKEY" : "GOODKEY";
+			},
+			notify() {},
+		};
+		const handle = mockFetch(() => {
+			authCalls++;
+			return authCalls === 1
+				? { status: 403, body: "Invalid key" }
+				: { status: 200, body: { userID: 42, username: "me", access: { user: { library: true } } } };
+		});
+		const provider = createZoteroProvider();
+		const cred = await provider.auth.apiKey!.login!(interaction);
+		assert.equal((cred as { key?: string }).key, "GOODKEY");
+		assert.equal(prompts, 2);
+		handle.restore();
 	});
 });
 
