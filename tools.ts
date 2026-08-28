@@ -14,13 +14,20 @@ import {
 	exportItems,
 	getChildren,
 	getCollection,
+	getFullText,
 	getItem,
 	itemTemplate,
 	listCollectionItems,
 	listCollections,
+	listCreatorFields,
+	listCreatorTypes,
+	listItemFields,
+	listItemTypeFields,
+	listItemTypes,
 	listTags,
 	removeItemsFromCollection,
 	searchItems,
+	setFullText,
 	setItemTags,
 	updateCollection,
 	updateItem,
@@ -472,5 +479,85 @@ export function registerZoteroTools(pi: ExtensionAPI): void {
 			);
 			return textResult({ format: params.format, chars: exported.length, content: exported });
 			},
+	});
+
+	pi.registerTool({
+		name: "zotero_schema",
+		label: "Zotero Schema",
+		description:
+			"Read-only access to Zotero's item-type schema so the agent can construct valid create/update payloads. " +
+			"Actions: 'itemTypes' (all item types), 'itemFields' (all fields), 'itemTypeFields' (valid fields for one itemType — requires itemType), " +
+			"'creatorTypes' (valid creator types for one itemType — requires itemType), 'creatorFields' (localized firstName/lastName/name). " +
+			"No auth required (public endpoints). Use zotero_template for a ready-to-fill item, and this for discovering valid fields/creators for exotic types.",
+		promptSnippet: "Look up valid Zotero item types, fields, and creator types.",
+		parameters: Type.Object({
+			action: StringEnum(["itemTypes", "itemFields", "itemTypeFields", "creatorTypes", "creatorFields"] as const, {
+				description: "Schema query to perform.",
+			}),
+			itemType: Type.Optional(
+				Type.String({ description: "Required for itemTypeFields and creatorTypes (e.g. journalArticle, book)." }),
+			),
+		}),
+		async execute(_id, params, signal) {
+			switch (params.action) {
+				case "itemTypes":
+					return textResult(await listItemTypes(signal));
+				case "itemFields":
+					return textResult(await listItemFields(signal));
+				case "itemTypeFields": {
+					if (!params.itemType) throw new Error("itemType is required for itemTypeFields.");
+					return textResult(await listItemTypeFields(params.itemType, signal));
+				}
+				case "creatorTypes": {
+					if (!params.itemType) throw new Error("itemType is required for creatorTypes.");
+					return textResult(await listCreatorTypes(params.itemType, signal));
+				}
+				case "creatorFields":
+					return textResult(await listCreatorFields(signal));
+				default:
+					throw new Error(`Unknown action: ${params.action}`);
+			}
+		},
+	});
+
+	pi.registerTool({
+		name: "zotero_fulltext",
+		label: "Zotero Full Text",
+		description:
+			"Get or set extracted full-text content for a Zotero attachment (enables qmode='everything' search without the desktop client). " +
+			"Actions: 'get' (retrieve extracted text for an attachment by key), 'set' (store extracted text for an attachment — use indexedChars/totalChars for text docs, indexedPages/totalPages for PDFs).",
+		promptSnippet: "Read or write Zotero attachment full-text content.",
+		parameters: Type.Object({
+			action: StringEnum(["get", "set"] as const, { description: "Full-text action to perform." }),
+			itemKey: Type.String({ description: "Attachment item key." }),
+			content: Type.Optional(Type.String({ description: "Extracted text to store (required for 'set')." })),
+			indexedChars: Type.Optional(Type.Number({ description: "Indexed character count (text docs)." })),
+			totalChars: Type.Optional(Type.Number({ description: "Total character count (text docs)." })),
+			indexedPages: Type.Optional(Type.Number({ description: "Indexed page count (PDFs)." })),
+			totalPages: Type.Optional(Type.Number({ description: "Total page count (PDFs)." })),
+		}),
+		async execute(_id, params, signal, _onUpdate, ctx) {
+			const cfg = await resolveConfig(ctx);
+			switch (params.action) {
+				case "get": {
+					const ft = await getFullText(cfg, params.itemKey, signal);
+					return textResult({ itemKey: params.itemKey, ...ft });
+				}
+				case "set": {
+					if (!params.content) throw new Error("content is required for set.");
+					const payload = {
+						content: params.content,
+						...(params.indexedChars !== undefined ? { indexedChars: params.indexedChars } : {}),
+						...(params.totalChars !== undefined ? { totalChars: params.totalChars } : {}),
+						...(params.indexedPages !== undefined ? { indexedPages: params.indexedPages } : {}),
+						...(params.totalPages !== undefined ? { totalPages: params.totalPages } : {}),
+					};
+					await setFullText(cfg, params.itemKey, payload, signal);
+					return textResult({ itemKey: params.itemKey, set: true, ok: true });
+				}
+				default:
+					throw new Error(`Unknown action: ${params.action}`);
+			}
+		},
 	});
 }

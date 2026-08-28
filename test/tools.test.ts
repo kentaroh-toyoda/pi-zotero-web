@@ -331,3 +331,83 @@ describe("tools.zotero_export", () => {
 		handle.restore();
 	});
 });
+
+describe("tools.zotero_schema", () => {
+	it("itemTypes returns the list without auth", async () => {
+		const { tools, ctx } = harness();
+		const handle = mockFetch((c) =>
+			c.url === "https://api.zotero.org/itemTypes" ? { status: 200, body: [{ itemType: "book", localized: "Book" }] } : undefined,
+		);
+		const res = await tools.get("zotero_schema")!.execute("id", { action: "itemTypes" }, undefined, undefined, ctx(NO_AUTH));
+		const parsed = JSON.parse((res.content[0] as { text: string }).text);
+		assert.equal(parsed[0].itemType, "book");
+		handle.restore();
+	});
+
+	it("itemTypeFields requires itemType", async () => {
+		const { tools, ctx } = harness();
+		await assert.rejects(
+			() => tools.get("zotero_schema")!.execute("id", { action: "itemTypeFields" }, undefined, undefined, ctx(AUTH)),
+			/itemType is required/,
+		);
+	});
+
+	it("creatorTypes requires itemType", async () => {
+		const { tools, ctx } = harness();
+		await assert.rejects(
+			() => tools.get("zotero_schema")!.execute("id", { action: "creatorTypes" }, undefined, undefined, ctx(AUTH)),
+			/itemType is required/,
+		);
+	});
+
+	it("creatorTypes passes itemType through", async () => {
+		const { tools, ctx } = harness();
+		const handle = mockFetch((c) =>
+			c.url.includes("itemTypeCreatorTypes?") && c.url.includes("itemType=book")
+				? { status: 200, body: [{ creatorType: "author", localized: "Author" }] }
+				: undefined,
+		);
+		const res = await tools.get("zotero_schema")!.execute("id", { action: "creatorTypes", itemType: "book" }, undefined, undefined, ctx(AUTH));
+		const parsed = JSON.parse((res.content[0] as { text: string }).text);
+		assert.equal(parsed[0].creatorType, "author");
+		handle.restore();
+	});
+});
+
+describe("tools.zotero_fulltext", () => {
+	it("get returns the full-text content", async () => {
+		const { tools, ctx } = harness();
+		const handle = mockFetch((c) =>
+			c.url.endsWith("/users/42/items/ATT/fulltext") ? { status: 200, body: { content: "hello", indexedPages: 2, totalPages: 2 } } : undefined,
+		);
+		const res = await tools.get("zotero_fulltext")!.execute("id", { action: "get", itemKey: "ATT" }, undefined, undefined, ctx(AUTH));
+		const parsed = JSON.parse((res.content[0] as { text: string }).text);
+		assert.equal(parsed.content, "hello");
+		assert.equal(parsed.indexedPages, 2);
+		handle.restore();
+	});
+
+	it("set requires content", async () => {
+		const { tools, ctx } = harness();
+		await assert.rejects(
+			() => tools.get("zotero_fulltext")!.execute("id", { action: "set", itemKey: "ATT" }, undefined, undefined, ctx(AUTH)),
+			/content is required/,
+		);
+	});
+
+	it("set PUTs the normalized payload (omits undefined optional fields)", async () => {
+		const { tools, ctx } = harness();
+		const handle = mockFetch((c) =>
+			c.method === "PUT" && c.url.endsWith("/users/42/items/ATT/fulltext") ? { status: 200, body: "" } : undefined,
+		);
+		const res = await tools
+			.get("zotero_fulltext")!
+			.execute("id", { action: "set", itemKey: "ATT", content: "txt", indexedChars: 3, totalChars: 3 }, undefined, undefined, ctx(AUTH));
+		const call = handle.calls[0];
+		const body = JSON.parse(call!.body as string);
+		assert.deepEqual(body, { content: "txt", indexedChars: 3, totalChars: 3 });
+		const parsed = JSON.parse((res.content[0] as { text: string }).text);
+		assert.equal(parsed.ok, true);
+		handle.restore();
+	});
+});

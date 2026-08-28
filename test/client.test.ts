@@ -20,13 +20,20 @@ import {
 	itemTemplate,
 	listCollectionItems,
 	listCollections,
+	listCreatorFields,
+	listCreatorTypes,
+	listItemFields,
+	listItemTypeFields,
+	listItemTypes,
 	listTags,
 	removeItemsFromCollection,
 	searchItems,
+	setFullText,
 	setItemTags,
 	updateCollection,
 	updateItem,
 	uploadAttachmentFile,
+	getFullText,
 } from "../client.ts";
 import { assertHeader, mockFetch, type FetchCall } from "./_mock.ts";
 
@@ -420,6 +427,83 @@ describe("client export", () => {
 		);
 		const out = await exportItems(CFG, { format: "bib", itemKeys: ["A"] });
 		assert.equal(out, "<div>ref</div>");
+		handle.restore();
+	});
+});
+
+describe("client schema", () => {
+	it("listItemTypes hits /itemTypes", async () => {
+		const handle = mockFetch((c) =>
+			c.url === "https://api.zotero.org/itemTypes" ? { status: 200, body: [{ itemType: "book", localized: "Book" }] } : undefined,
+		);
+		const types = await listItemTypes();
+		assert.equal(types[0].itemType, "book");
+		handle.restore();
+	});
+
+	it("listItemFields hits /itemFields", async () => {
+		const handle = mockFetch((c) =>
+			c.url === "https://api.zotero.org/itemFields" ? { status: 200, body: [{ field: "title", localized: "Title" }] } : undefined,
+		);
+		const fields = await listItemFields();
+		assert.equal(fields[0].field, "title");
+		handle.restore();
+	});
+
+	it("listItemTypeFields passes itemType in the query", async () => {
+		const handle = mockFetch((c) =>
+			c.url.startsWith("https://api.zotero.org/itemTypeFields?") && c.url.includes("itemType=book")
+				? { status: 200, body: [{ field: "title", localized: "Title" }] }
+				: undefined,
+		);
+		const fields = await listItemTypeFields("book");
+		assert.equal(fields[0].field, "title");
+		handle.restore();
+	});
+
+	it("listCreatorTypes passes itemType in the query", async () => {
+		const handle = mockFetch((c) =>
+			c.url.startsWith("https://api.zotero.org/itemTypeCreatorTypes?") && c.url.includes("itemType=book")
+				? { status: 200, body: [{ creatorType: "author", localized: "Author" }] }
+				: undefined,
+		);
+		const types = await listCreatorTypes("book");
+		assert.equal(types[0].creatorType, "author");
+		handle.restore();
+	});
+
+	it("listCreatorFields hits /creatorFields", async () => {
+		const handle = mockFetch((c) =>
+			c.url === "https://api.zotero.org/creatorFields" ? { status: 200, body: [{ field: "firstName", localized: "First" }] } : undefined,
+		);
+		const fields = await listCreatorFields();
+		assert.equal(fields[0].field, "firstName");
+		handle.restore();
+	});
+});
+
+describe("client full text", () => {
+	it("getFullText GETs /items/<key>/fulltext", async () => {
+		const handle = mockFetch((c) =>
+			c.url.endsWith("/users/42/items/ATT/fulltext") ? { status: 200, body: { content: "hello", indexedPages: 1, totalPages: 1 } } : undefined,
+		);
+		const ft = await getFullText(CFG, "ATT");
+		assert.equal(ft.content, "hello");
+		assert.equal(ft.indexedPages, 1);
+		handle.restore();
+	});
+
+	it("setFullText PUTs the payload as JSON", async () => {
+		const handle = mockFetch((c) =>
+			c.method === "PUT" && c.url.endsWith("/users/42/items/ATT/fulltext") ? { status: 200, body: "" } : undefined,
+		);
+		await setFullText(CFG, "ATT", { content: "txt", indexedChars: 3, totalChars: 3 });
+		const call = handle.calls[0];
+		assert.equal(call!.method, "PUT");
+		assert.equal(call!.headers["content-type"], "application/json");
+		const body = JSON.parse(call!.body as string);
+		assert.equal(body.content, "txt");
+		assert.equal(body.indexedChars, 3);
 		handle.restore();
 	});
 });

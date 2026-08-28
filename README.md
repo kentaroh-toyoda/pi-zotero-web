@@ -59,6 +59,8 @@ All tools are registered for the agent to call automatically. You can also promp
 | `zotero_tags` | `action=list\|get\|set`, `itemKey`, `version`, `tags`, `limit` | List library tags or tags on an item, or replace an item's full tags array (`tags: [{tag, type:0\|1}]`, type 0=manual, 1=automatic). |
 | `zotero_collection` | `action=list\|get\|items\|create\|rename\|delete\|add\|remove`, `collectionKey`, `parentKey`, `name`, `version`, `itemKeys`/`items`, `top`, `limit` | Manage collections (folders): list/get/create/rename/delete, list items in a collection, and add/remove items to/from a collection (requires each item's current `version` + `collections`). |
 | `zotero_export` | `format`, `itemKeys`, `collectionKey` | Export items as BibTeX, BibLaTeX, CSL JSON, RIS, CSV, MODS, COinS, bookmarks, or a formatted bibliography (`bib`). Select by `itemKeys` or a `collectionKey`. |
+| `zotero_schema` | `action=itemTypes\|itemFields\|itemTypeFields\|creatorTypes\|creatorFields`, `itemType` | Read-only access to Zotero's item-type schema (public endpoints, no auth) so the agent can build valid create payloads for exotic types. |
+| `zotero_fulltext` | `action=get\|set`, `itemKey`, `content`, `indexedChars`/`totalChars` or `indexedPages`/`totalPages` | Get or set extracted full-text content for an attachment, enabling `qmode=everything` search without the desktop client. |
 
 ### Typical workflows
 

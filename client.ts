@@ -527,3 +527,103 @@ export async function downloadAttachmentFile(
 	await writeFile(opts.outputPath, buf);
 	return { path: opts.outputPath, md5: res.headers.get("ETag") ?? undefined, bytes: buf.length };
 }
+
+// -----------------------------------------------------------------------------
+// Schema (item types / fields / creator types)
+// -----------------------------------------------------------------------------
+
+export interface NameLocalized {
+	field?: string;
+	itemType?: string;
+	creatorType?: string;
+	localized: string;
+}
+
+/** GET /itemTypes — all item types with localized names. */
+export async function listItemTypes(
+	signal?: AbortSignal,
+): Promise<Array<{ itemType: string; localized: string }>> {
+	const res = await fetch(`${ZOTERO_API_BASE}/itemTypes`, { signal });
+	if (!res.ok) throw new ZoteroError("Failed to list item types", res.status, await res.text());
+	return (await res.json()) as Array<{ itemType: string; localized: string }>;
+}
+
+/** GET /itemFields — all item fields with localized names. */
+export async function listItemFields(
+	signal?: AbortSignal,
+): Promise<Array<{ field: string; localized: string }>> {
+	const res = await fetch(`${ZOTERO_API_BASE}/itemFields`, { signal });
+	if (!res.ok) throw new ZoteroError("Failed to list item fields", res.status, await res.text());
+	return (await res.json()) as Array<{ field: string; localized: string }>;
+}
+
+/** GET /itemTypeFields?itemType=... — valid fields for an item type. */
+export async function listItemTypeFields(
+	itemType: string,
+	signal?: AbortSignal,
+): Promise<Array<{ field: string; localized: string }>> {
+	const q = new URLSearchParams({ itemType });
+	const res = await fetch(`${ZOTERO_API_BASE}/itemTypeFields?${q.toString()}`, { signal });
+	if (!res.ok) throw new ZoteroError("Failed to list fields for item type", res.status, await res.text());
+	return (await res.json()) as Array<{ field: string; localized: string }>;
+}
+
+/** GET /itemTypeCreatorTypes?itemType=... — valid creator types for an item type. */
+export async function listCreatorTypes(
+	itemType: string,
+	signal?: AbortSignal,
+): Promise<Array<{ creatorType: string; localized: string }>> {
+	const q = new URLSearchParams({ itemType });
+	const res = await fetch(`${ZOTERO_API_BASE}/itemTypeCreatorTypes?${q.toString()}`, { signal });
+	if (!res.ok) throw new ZoteroError("Failed to list creator types", res.status, await res.text());
+	return (await res.json()) as Array<{ creatorType: string; localized: string }>;
+}
+
+/** GET /creatorFields — localized creator field names (firstName/lastName/name). */
+export async function listCreatorFields(
+	signal?: AbortSignal,
+): Promise<Array<{ field: string; localized: string }>> {
+	const res = await fetch(`${ZOTERO_API_BASE}/creatorFields`, { signal });
+	if (!res.ok) throw new ZoteroError("Failed to list creator fields", res.status, await res.text());
+	return (await res.json()) as Array<{ field: string; localized: string }>;
+}
+
+// -----------------------------------------------------------------------------
+// Full-text content
+// -----------------------------------------------------------------------------
+
+export interface FullTextContent {
+	content: string;
+	indexedPages?: number;
+	totalPages?: number;
+	indexedChars?: number;
+	totalChars?: number;
+}
+
+/** GET /items/<itemKey>/fulltext — retrieve extracted full-text content for an attachment. */
+export async function getFullText(
+	cfg: ZoteroConfig,
+	itemKey: string,
+	signal?: AbortSignal,
+): Promise<FullTextContent> {
+	const res = await zoteroFetch(cfg, `${prefix(cfg)}/items/${itemKey}/fulltext`, { signal });
+	return (await res.json()) as FullTextContent;
+}
+
+/**
+ * PUT /items/<itemKey>/fulltext — set extracted full-text content for an attachment.
+ * Use indexedChars/totalChars for text documents, indexedPages/totalPages for PDFs.
+ */
+export async function setFullText(
+	cfg: ZoteroConfig,
+	itemKey: string,
+	content: FullTextContent,
+	signal?: AbortSignal,
+): Promise<void> {
+	await zoteroFetch(cfg, `${prefix(cfg)}/items/${itemKey}/fulltext`, {
+		method: "PUT",
+		signal,
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(content),
+	});
+}
