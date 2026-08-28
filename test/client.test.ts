@@ -128,7 +128,9 @@ describe("client.getItem / getChildren / itemTemplate", () => {
 describe("client write operations", () => {
 	it("createItems POSTs JSON with a Zotero-Write-Token", async () => {
 		const handle = mockFetch((c) =>
-			c.method === "POST" && c.url.endsWith("/users/42/items") ? json(200, [{ key: "NEW1", version: 1, data: {} }]) : undefined,
+			c.method === "POST" && c.url.endsWith("/users/42/items")
+				? json(200, { successful: { "0": { key: "NEW1", version: 1, data: {} } }, success: { "0": "NEW1" }, unchanged: {}, failed: {} })
+				: undefined,
 		);
 		const created = await createItems(CFG, [{ itemType: "journalArticle", title: "T" }]);
 		const call = handle.calls[0];
@@ -174,7 +176,7 @@ describe("client file upload", () => {
 			calls.push(c);
 			// 1. create attachment item
 			if (c.method === "POST" && c.url.endsWith("/users/42/items")) {
-				return json(200, [{ key: "ATT1", version: 1, data: { itemType: "attachment" } }]);
+				return json(200, { successful: { "0": { key: "ATT1", version: 1, data: { itemType: "attachment" } } }, success: { "0": "ATT1" }, unchanged: {}, failed: {} });
 			}
 			// 2. upload authorization
 			if (c.method === "POST" && c.url.endsWith("/users/42/items/ATT1/file") && (c.body as string).startsWith("md5=") && !(c.body as string).startsWith("upload=")) {
@@ -229,7 +231,7 @@ describe("client file upload", () => {
 		const handle = mockFetch((c) => {
 			calls.push(c);
 			if (c.method === "POST" && c.url.endsWith("/users/42/items")) {
-				return json(200, [{ key: "ATT1", version: 1, data: {} }]);
+				return json(200, { successful: { "0": { key: "ATT1", version: 1, data: {} } }, success: { "0": "ATT1" }, unchanged: {}, failed: {} });
 			}
 			if (c.method === "POST" && c.url.endsWith("/users/42/items/ATT1/file")) {
 				return json(200, { exists: 1 });

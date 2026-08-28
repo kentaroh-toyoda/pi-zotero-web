@@ -72,7 +72,7 @@ describe("tools.zotero_item", () => {
 			// dedup search returns no matches, then the POST creates.
 			if (c.method === "GET" && c.url.includes("/users/42/items/top?")) return { status: 200, body: [] };
 			if (c.method === "POST" && c.url.endsWith("/users/42/items"))
-				return { status: 200, body: [{ key: "NEW", version: 1, data: {} }] };
+				return { status: 200, body: { successful: { "0": { key: "NEW", version: 1, data: {} } }, success: { "0": "NEW" }, unchanged: {}, failed: {} } };
 			return undefined;
 		});
 		const res = await tools
@@ -90,7 +90,7 @@ describe("tools.zotero_item", () => {
 			if (c.method === "GET" && c.url.includes("/users/42/items/top?")) return { status: 200, body: [] };
 			if (c.method === "POST" && c.url.endsWith("/users/42/items")) {
 				posted = JSON.parse(c.body as string);
-				return { status: 200, body: [{ key: "NEW2", version: 1, data: {} }] };
+				return { status: 200, body: { successful: { "0": { key: "NEW2", version: 1, data: {} } }, success: { "0": "NEW2" }, unchanged: {}, failed: {} } };
 			}
 			return undefined;
 		});
@@ -211,7 +211,7 @@ describe("tools.zotero_item", () => {
 				return { status: 200, body: [] };
 			}
 			if (c.method === "POST" && c.url.endsWith("/users/42/items"))
-				return { status: 200, body: [{ key: "FORCED", version: 1, data: {} }] };
+				return { status: 200, body: { successful: { "0": { key: "FORCED", version: 1, data: {} } }, success: { "0": "FORCED" }, unchanged: {}, failed: {} } };
 			return undefined;
 		});
 		const res = await tools
@@ -233,7 +233,7 @@ describe("tools.zotero_item", () => {
 		const { tools, ctx } = harness();
 		const handle = mockFetch((c) => {
 			if (c.method === "POST" && c.url.endsWith("/users/42/items"))
-				return { status: 200, body: [{ key: "A", version: 1, data: {} }, { key: "B", version: 1, data: {} }] };
+				return { status: 200, body: { successful: { "0": { key: "A", version: 1, data: {} }, "1": { key: "B", version: 1, data: {} } }, success: { "0": "A", "1": "B" }, unchanged: {}, failed: {} } };
 			return undefined;
 		});
 		const res = await tools
