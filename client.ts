@@ -132,6 +132,41 @@ export async function itemTemplate(
 	return (await res.json()) as Record<string, unknown>;
 }
 
+export interface ZoteroTag {
+	tag: string;
+	type?: number;
+	/** Number of items using this tag (present in library-wide tag listings with the default format). */
+	items?: number;
+	meta?: number;
+}
+
+/** List all tags in the library, or tags on a specific item. */
+export async function listTags(
+	cfg: ZoteroConfig,
+	opts: { itemKey?: string; limit?: number } = {},
+	signal?: AbortSignal,
+): Promise<ZoteroTag[]> {
+	const q = new URLSearchParams({ format: "json" });
+	if (opts.limit !== undefined) q.set("limit", String(opts.limit));
+	const path = opts.itemKey
+		? `${prefix(cfg)}/items/${opts.itemKey}/tags`
+		: `${prefix(cfg)}/tags`;
+	const res = await zoteroFetch(cfg, `${path}?${q.toString()}`, { signal });
+	return (await res.json()) as ZoteroTag[];
+}
+
+/** Set (replace) the full tags array on an item. `version` is the current item version. */
+export async function setItemTags(
+	cfg: ZoteroConfig,
+	itemKey: string,
+	version: number,
+	tags: Array<{ tag: string; type?: number }>,
+	signal?: AbortSignal,
+): Promise<void> {
+	const normalized = tags.map((t) => ({ tag: t.tag, type: t.type ?? 0 }));
+	await updateItem(cfg, itemKey, version, { tags: normalized }, signal);
+}
+
 /** Create one or more items. Returns the created items with key/version. */
 export async function createItems(
 	cfg: ZoteroConfig,

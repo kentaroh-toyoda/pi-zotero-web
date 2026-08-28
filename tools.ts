@@ -11,7 +11,9 @@ import {
 	getChildren,
 	getItem,
 	itemTemplate,
+	listTags,
 	searchItems,
+	setItemTags,
 	updateItem,
 	uploadAttachmentFile,
 	createItems,
@@ -235,7 +237,65 @@ export function registerZoteroTools(pi: ExtensionAPI): void {
 					if (!params.itemKey) throw new Error("itemKey (attachment key) is required for delete.");
 					if (params.version === undefined) throw new Error("version is required for delete.");
 					await deleteItem(cfg, params.itemKey, params.version, signal);
-					return textResult({ deleted: params.itemKey, ok: true });
+				return textResult({ deleted: params.itemKey, ok: true });
+				}
+				default:
+					throw new Error(`Unknown action: ${params.action}`);
+			}
+		},
+	});
+
+	pi.registerTool({
+		name: "zotero_tags",
+		label: "Zotero Tags",
+		description:
+			"Manage Zotero tags. Actions: 'list' (all tags in the library, or tags on one item when itemKey is given), " +
+			"'get' (tags on a single item via its key), 'set' (replace an item's full tags array, requires the item version). " +
+			"Each tag is { tag: string, type: 0|1 } where type 0=manual and 1=automatic. Use zotero_search with a tag param to filter by tag.",
+		promptSnippet: "List or set Zotero tags on items.",
+		parameters: Type.Object({
+			action: StringEnum(["list", "get", "set"] as const, {
+				description: "Tag action to perform.",
+			}),
+			itemKey: Type.Optional(
+				Type.String({ description: "Item key. Required for 'get' and 'set'; for 'list' restricts to this item's tags (otherwise lists library tags)." }),
+			),
+			version: Type.Optional(
+				Type.Number({ description: "Current item version (required for 'set'). Use the version returned by zotero_search/get." }),
+			),
+			tags: Type.Optional(
+				Type.Array(
+					Type.Object({
+						tag: Type.String({ description: "Tag text." }),
+						type: Type.Optional(Type.Number({ description: "0=manual (default), 1=automatic." })),
+					}),
+					{ description: "Full replacement tags array for 'set'. Replaces all existing tags on the item." },
+				),
+			),
+			limit: Type.Optional(Type.Number({ description: "Max tags for 'list' (default 50)." })),
+		}),
+		async execute(_id, params, signal, _onUpdate, ctx) {
+			const cfg = await resolveConfig(ctx);
+			switch (params.action) {
+				case "list": {
+					const tags = await listTags(cfg, { itemKey: params.itemKey, limit: params.limit ?? 50 }, signal);
+					return textResult({ count: tags.length, tags });
+				}
+				case "get": {
+					if (!params.itemKey) throw new Error("itemKey is required for get.");
+					const tags = await listTags(cfg, { itemKey: params.itemKey }, signal);
+					return textResult({ itemKey: params.itemKey, count: tags.length, tags });
+				}
+				case "set": {
+					if (!params.itemKey) throw new Error("itemKey is required for set.");
+					if (params.version === undefined) throw new Error("version is required for set.");
+					if (!params.tags) throw new Error("tags array is required for set.");
+					const normalized = params.tags.map((t) => ({
+						tag: t.tag,
+						type: t.type ?? 0,
+					}));
+					await setItemTags(cfg, params.itemKey, params.version, normalized, signal);
+					return textResult({ itemKey: params.itemKey, set: normalized, ok: true });
 				}
 				default:
 					throw new Error(`Unknown action: ${params.action}`);

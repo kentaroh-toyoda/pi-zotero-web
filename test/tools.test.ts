@@ -160,3 +160,64 @@ describe("tools.zotero_attachment", () => {
 		);
 	});
 });
+
+describe("tools.zotero_tags", () => {
+	it("list returns library tags", async () => {
+		const { tools, ctx } = harness();
+		const handle = mockFetch((c) =>
+			c.url.includes("/users/42/tags?") ? { status: 200, body: [{ tag: "to-read", type: 0, items: 2 }] } : undefined,
+		);
+		const res = await tools.get("zotero_tags")!.execute("id", { action: "list" }, undefined, undefined, ctx(AUTH));
+		const parsed = JSON.parse((res.content[0] as { text: string }).text);
+		assert.equal(parsed.count, 1);
+		assert.equal(parsed.tags[0].tag, "to-read");
+		handle.restore();
+	});
+
+	it("list scoped to an item uses the item-tags path", async () => {
+		const { tools, ctx } = harness();
+		const handle = mockFetch((c) =>
+			c.url.includes("/users/42/items/K1/tags?") ? { status: 200, body: [{ tag: "ML", type: 1 }] } : undefined,
+		);
+		await tools.get("zotero_tags")!.execute("id", { action: "list", itemKey: "K1" }, undefined, undefined, ctx(AUTH));
+		assert.match(handle.calls[0]!.url, /\/items\/K1\/tags\?/);
+		handle.restore();
+	});
+
+	it("get requires itemKey", async () => {
+		const { tools, ctx } = harness();
+		await assert.rejects(
+			() => tools.get("zotero_tags")!.execute("id", { action: "get" }, undefined, undefined, ctx(AUTH)),
+			/itemKey is required/,
+		);
+	});
+
+	it("set requires version and tags", async () => {
+		const { tools, ctx } = harness();
+		await assert.rejects(
+			() => tools.get("zotero_tags")!.execute("id", { action: "set", itemKey: "K" }, undefined, undefined, ctx(AUTH)),
+			/version is required/,
+		);
+		await assert.rejects(
+			() => tools.get("zotero_tags")!.execute("id", { action: "set", itemKey: "K", version: 1 }, undefined, undefined, ctx(AUTH)),
+			/tags array is required/,
+		);
+	});
+
+	it("set patches with normalized tags (defaults type to 0)", async () => {
+		const { tools, ctx } = harness();
+		const handle = mockFetch((c) =>
+			c.method === "PATCH" && c.url.endsWith("/users/42/items/K") ? { status: 200, body: "" } : undefined,
+		);
+		const res = await tools
+			.get("zotero_tags")!
+			.execute("id", { action: "set", itemKey: "K", version: 5, tags: [{ tag: "a" }, { tag: "b", type: 1 }] }, undefined, undefined, ctx(AUTH));
+		const call = handle.calls[0];
+		assert.equal(call!.headers["if-unmodified-since-version"], "5");
+		const body = JSON.parse(call!.body as string);
+		assert.deepEqual(body.tags, [{ tag: "a", type: 0 }, { tag: "b", type: 1 }]);
+		const parsed = JSON.parse((res.content[0] as { text: string }).text);
+		assert.equal(parsed.ok, true);
+		handle.restore();
+	});
+});

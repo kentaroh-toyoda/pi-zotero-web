@@ -56,6 +56,7 @@ All tools are registered for the agent to call automatically. You can also promp
 | `zotero_item` | `action=get\|create\|update\|delete`, `itemKey`, `version`, `item` | CRUD on an item. Use the `version` returned by search/get for update/delete. |
 | `zotero_template` | `itemType`, `linkMode` | Fetch an item template to build valid create/update payloads. |
 | `zotero_attachment` | `action=list\|upload\|download\|delete`, `itemKey`/`parentKey`, `filePath`, `version`, `title`, `contentType` | Manage PDF/attachment files. Upload reads a local file; download writes to a local path. |
+| `zotero_tags` | `action=list\|get\|set`, `itemKey`, `version`, `tags`, `limit` | List library tags or tags on an item, or replace an item's full tags array (`tags: [{tag, type:0\|1}]`, type 0=manual, 1=automatic). |
 
 ### Typical workflows
 

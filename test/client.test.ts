@@ -13,7 +13,9 @@ import {
 	getChildren,
 	getItem,
 	itemTemplate,
+	listTags,
 	searchItems,
+	setItemTags,
 	updateItem,
 	uploadAttachmentFile,
 } from "../client.ts";
@@ -242,5 +244,43 @@ describe("client file download", () => {
 		assert.equal(await readFile(outPath, "utf8"), "PDFBYTES");
 		handle.restore();
 		await rm(dir, { recursive: true, force: true });
+	});
+});
+
+describe("client tags", () => {
+	it("listTags lists library tags by default", async () => {
+		const handle = mockFetch((c) =>
+			c.url.includes("/users/42/tags?") ? { status: 200, body: [{ tag: "to-read", type: 0, items: 3 }] } : undefined,
+		);
+		const tags = await listTags(CFG, { limit: 50 });
+		assert.equal(tags.length, 1);
+		assert.equal(tags[0].tag, "to-read");
+		handle.restore();
+	});
+
+	it("listTags targets an item's tags when itemKey is given", async () => {
+		const handle = mockFetch((c) =>
+			c.url.includes("/users/42/items/K1/tags?") ? { status: 200, body: [{ tag: "ML", type: 1 }] } : undefined,
+		);
+		const tags = await listTags(CFG, { itemKey: "K1" });
+		assert.equal(tags[0].tag, "ML");
+		handle.restore();
+	});
+
+	it("setItemTags PATCHes the item with the normalized tags array", async () => {
+		const handle = mockFetch((c) =>
+			c.method === "PATCH" && c.url.endsWith("/users/42/items/K1") ? { status: 200, body: "" } : undefined,
+		);
+		await setItemTags(
+			CFG,
+			"K1",
+			9,
+			[{ tag: "a", type: 0 }, { tag: "b" }],
+		);
+		const call = handle.calls[0];
+		assert.equal(call!.headers["if-unmodified-since-version"], "9");
+		const body = JSON.parse(call!.body as string);
+		assert.deepEqual(body.tags, [{ tag: "a", type: 0 }, { tag: "b", type: 0 }]);
+		handle.restore();
 	});
 });
