@@ -167,6 +167,197 @@ export async function setItemTags(
 	await updateItem(cfg, itemKey, version, { tags: normalized }, signal);
 }
 
+// -----------------------------------------------------------------------------
+// Collections
+// -----------------------------------------------------------------------------
+
+export interface ZoteroCollection {
+	key: string;
+	version: number;
+	library?: unknown;
+	meta?: Record<string, unknown>;
+	data: Record<string, unknown> & {
+		key?: string;
+		version?: number;
+		name?: string;
+		parentCollection?: string | false;
+};
+}
+
+/** List collections: top-level by default, subcollections of a parent when parentKey is given. */
+export async function listCollections(
+	cfg: ZoteroConfig,
+	opts: { parentKey?: string; top?: boolean; limit?: number } = {},
+	signal?: AbortSignal,
+): Promise<ZoteroCollection[]> {
+	const q = new URLSearchParams({ format: "json" });
+	if (opts.limit !== undefined) q.set("limit", String(opts.limit));
+	const path = opts.parentKey
+		? `${prefix(cfg)}/collections/${opts.parentKey}/collections`
+		: opts.top
+			? `${prefix(cfg)}/collections/top`
+			: `${prefix(cfg)}/collections`;
+	const res = await zoteroFetch(cfg, `${path}?${q.toString()}`, { signal });
+	return (await res.json()) as ZoteroCollection[];
+}
+
+/** Get a single collection by key. */
+export async function getCollection(
+	cfg: ZoteroConfig,
+	collectionKey: string,
+	signal?: AbortSignal,
+): Promise<ZoteroCollection> {
+	const res = await zoteroFetch(cfg, `${prefix(cfg)}/collections/${collectionKey}?format=json`, { signal });
+	return (await res.json()) as ZoteroCollection;
+}
+/** List items in a collection. Pass `top: true` for top-level items only. */
+export async function listCollectionItems(
+	cfg: ZoteroConfig,
+	collectionKey: string,
+	opts: { top?: boolean; limit?: number; q?: string; qmode?: "titleCreatorYear" | "everything" } = {},
+	signal?: AbortSignal,
+): Promise<ZoteroItem[]> {
+	const q = new URLSearchParams({ format: "json" });
+	if (opts.limit !== undefined) q.set("limit", String(opts.limit));
+	if (opts.q) q.set("q", opts.q);
+	if (opts.qmode) q.set("qmode", opts.qmode);
+	const sub = opts.top ? "/items/top" : "/items";
+	const res = await zoteroFetch(cfg, `${prefix(cfg)}/collections/${collectionKey}${sub}?${q.toString()}`, {
+		signal,
+	});
+	return (await res.json()) as ZoteroItem[];
+}
+
+/** Create one or more collections. Each needs at least { name, parentCollection? }. */
+export async function createCollections(
+	cfg: ZoteroConfig,
+	collections: Array<{ name: string; parentCollection?: string | false }>,
+	signal?: AbortSignal,
+): Promise<ZoteroCollection[]> {
+	const token = crypto.randomUUID();
+	const res = await zoteroFetch(cfg, `${prefix(cfg)}/collections`, {
+		method: "POST",
+		signal,
+		headers: { "Content-Type": "application/json", "Zotero-Write-Token": token },
+		body: JSON.stringify(collections),
+	});
+	return (await res.json()) as ZoteroCollection[];
+}
+
+/** Patch a collection (e.g. rename). `version` is the current collection version. */
+export async function updateCollection(
+	cfg: ZoteroConfig,
+	collectionKey: string,
+	version: number,
+	patch: Record<string, unknown>,
+	signal?: AbortSignal,
+): Promise<void> {
+	await zoteroFetch(cfg, `${prefix(cfg)}/collections/${collectionKey}`, {
+		method: "PATCH",
+		signal,
+		headers: {
+			"Content-Type": "application/json",
+			"If-Unmodified-Since-Version": String(version),
+		},
+		body: JSON.stringify(patch),
+	});
+}
+
+/** Delete a collection. `version` is the current collection version. */
+export async function deleteCollection(
+	cfg: ZoteroConfig,
+	collectionKey: string,
+	version: number,
+	signal?: AbortSignal,
+): Promise<void> {
+	await zoteroFetch(cfg, `${prefix(cfg)}/collections/${collectionKey}`, {
+		method: "DELETE",
+		signal,
+		headers: { "If-Unmodified-Since-Version": String(version) },
+	});
+}
+
+/** Add items to a collection by patching each item's `collections` array. */
+export async function addItemsToCollection(
+	cfg: ZoteroConfig,
+	collectionKey: string,
+	items: Array<{ key: string; version: number; collections: string[] }>,
+	signal?: AbortSignal,
+): Promise<void> {
+	await Promise.all(
+		items.map((item) =>
+			updateItem(
+				cfg,
+				item.key,
+				item.version,
+				{ collections: Array.from(new Set([...item.collections, collectionKey])) },
+				signal,
+			),
+		),
+	);
+}
+
+/** Remove a collection key from each item's `collections` array. */
+export async function removeItemsFromCollection(
+	cfg: ZoteroConfig,
+	collectionKey: string,
+	items: Array<{ key: string; version: number; collections: string[] }>,
+	signal?: AbortSignal,
+): Promise<void> {
+	await Promise.all(
+		items.map((item) =>
+			updateItem(
+				cfg,
+				item.key,
+				item.version,
+				{ collections: item.collections.filter((c) => c !== collectionKey) },
+				signal,
+			),
+		),
+	);
+}
+
+// -----------------------------------------------------------------------------
+// Export / bibliography
+// -----------------------------------------------------------------------------
+
+export type ExportFormat =
+	| "bibtex"
+	| "biblatex"
+	| "csljson"
+	| "ris"
+	| "csv"
+	| "mods"
+	| "coins"
+	| "bookmarks";
+
+/**
+ * Export items as a string in the given format. `itemKeys` selects specific
+ * items; when omitted, exports the whole library (or a collection via `collectionKey`).
+ */
+export async function exportItems(
+	cfg: ZoteroConfig,
+	opts: {
+		format: ExportFormat | "bib";
+		itemKeys?: string[];
+		collectionKey?: string;
+		signal?: AbortSignal;
+	},
+): Promise<string> {
+	const { format, itemKeys, collectionKey, signal } = opts;
+	const q = new URLSearchParams();
+	if (format === "bib") q.set("format", "bib");
+	else q.set("format", format);
+	if (itemKeys?.length) q.set("itemKey", itemKeys.join(","));
+
+	const base = prefix(cfg);
+	const path = collectionKey
+		? `${base}/collections/${collectionKey}/items`
+		: `${base}/items`;
+	const res = await zoteroFetch(cfg, `${path}?${q.toString()}`, { signal });
+	return res.text();
+}
+
 /** Create one or more items. Returns the created items with key/version. */
 export async function createItems(
 	cfg: ZoteroConfig,

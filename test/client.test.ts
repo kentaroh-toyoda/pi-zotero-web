@@ -7,15 +7,24 @@ import { join } from "node:path";
 import {
 	type SearchParams,
 	ZoteroError,
+	addItemsToCollection,
+	createCollections,
 	createItems,
+	deleteCollection,
 	deleteItem,
 	downloadAttachmentFile,
+	exportItems,
 	getChildren,
+	getCollection,
 	getItem,
 	itemTemplate,
+	listCollectionItems,
+	listCollections,
 	listTags,
+	removeItemsFromCollection,
 	searchItems,
 	setItemTags,
+	updateCollection,
 	updateItem,
 	uploadAttachmentFile,
 } from "../client.ts";
@@ -281,6 +290,136 @@ describe("client tags", () => {
 		assert.equal(call!.headers["if-unmodified-since-version"], "9");
 		const body = JSON.parse(call!.body as string);
 		assert.deepEqual(body.tags, [{ tag: "a", type: 0 }, { tag: "b", type: 0 }]);
+		handle.restore();
+	});
+});
+
+describe("client collections", () => {
+	it("listCollections lists top-level by default", async () => {
+		const handle = mockFetch((c) =>
+			c.url.includes("/users/42/collections?") && !c.url.includes("/collections/")
+				? { status: 200, body: [{ key: "C1", version: 1, data: { name: "Read", parentCollection: false } }] }
+				: undefined,
+		);
+		const cols = await listCollections(CFG, { limit: 50 });
+		assert.equal(cols.length, 1);
+		assert.equal(cols[0].data.name, "Read");
+		handle.restore();
+	});
+
+	it("listCollections targets subcollections when parentKey is given", async () => {
+		const handle = mockFetch((c) =>
+			c.url.includes("/users/42/collections/PARENT/collections?") ? { status: 200, body: [] } : undefined,
+		);
+		await listCollections(CFG, { parentKey: "PARENT" });
+		assert.match(handle.calls[0]!.url, /\/collections\/PARENT\/collections\?/);
+		handle.restore();
+	});
+
+	it("getCollection fetches one collection", async () => {
+		const handle = mockFetch((c) =>
+			c.url.endsWith("/users/42/collections/CK?format=json") ? { status: 200, body: { key: "CK", version: 3, data: { name: "X" } } } : undefined,
+		);
+		const col = await getCollection(CFG, "CK");
+		assert.equal(col.key, "CK");
+		handle.restore();
+	});
+
+	it("listCollectionItems uses /items/top when top=true", async () => {
+		const handle = mockFetch((c) =>
+			c.url.includes("/users/42/collections/CK/items/top?") ? { status: 200, body: [{ key: "I1", version: 1, data: {} }] } : undefined,
+		);
+		const items = await listCollectionItems(CFG, "CK", { top: true });
+		assert.equal(items.length, 1);
+		handle.restore();
+	});
+
+	it("createCollections POSTs with a write token", async () => {
+		const handle = mockFetch((c) =>
+			c.method === "POST" && c.url.endsWith("/users/42/collections")
+				? { status: 200, body: [{ key: "NC", version: 1, data: { name: "New" } }] }
+				: undefined,
+		);
+		const created = await createCollections(CFG, [{ name: "New" }]);
+		const call = handle.calls[0];
+		assert.equal(created.length, 1);
+		assert.ok(call!.headers["zotero-write-token"]);
+		assert.match(call!.body as string, /New/);
+		handle.restore();
+	});
+
+	it("updateCollection PATCHes with If-Unmodified-Since-Version", async () => {
+		const handle = mockFetch((c) =>
+			c.method === "PATCH" && c.url.endsWith("/users/42/collections/CK") ? { status: 200, body: "" } : undefined,
+		);
+		await updateCollection(CFG, "CK", 7, { name: "Renamed" });
+		const call = handle.calls[0];
+		assert.equal(call!.headers["if-unmodified-since-version"], "7");
+		assert.match(call!.body as string, /Renamed/);
+		handle.restore();
+	});
+
+	it("deleteCollection DELETEs with version", async () => {
+		const handle = mockFetch((c) =>
+			c.method === "DELETE" && c.url.endsWith("/users/42/collections/CK") ? { status: 200, body: "" } : undefined,
+		);
+		await deleteCollection(CFG, "CK", 4);
+		const call = handle.calls[0];
+		assert.equal(call!.method, "DELETE");
+		assert.equal(call!.headers["if-unmodified-since-version"], "4");
+		handle.restore();
+	});
+
+	it("addItemsToCollection merges collection keys without duplicates", async () => {
+		const handle = mockFetch((c) =>
+			c.method === "PATCH" && c.url.endsWith("/users/42/items/I1") ? { status: 200, body: "" } : undefined,
+		);
+		await addItemsToCollection(CFG, "COL", [{ key: "I1", version: 2, collections: ["COL", "OTHER"] }]);
+		const body = JSON.parse(handle.calls[0]!.body as string);
+		assert.deepEqual(body.collections, ["COL", "OTHER"]);
+		handle.restore();
+	});
+
+	it("removeItemsFromCollection drops the collection key", async () => {
+		const handle = mockFetch((c) =>
+			c.method === "PATCH" && c.url.endsWith("/users/42/items/I1") ? { status: 200, body: "" } : undefined,
+		);
+		await removeItemsFromCollection(CFG, "COL", [{ key: "I1", version: 2, collections: ["COL", "OTHER"] }]);
+		const body = JSON.parse(handle.calls[0]!.body as string);
+		assert.deepEqual(body.collections, ["OTHER"]);
+		handle.restore();
+	});
+});
+
+describe("client export", () => {
+	it("exportItems requests the given format for selected itemKeys", async () => {
+		const handle = mockFetch((c) =>
+			c.url.includes("/users/42/items?") && c.url.includes("format=bibtex") && /itemKey=A(?:%2C|,)B/.test(c.url)
+				? { status: 200, body: "@misc{A,}\n" }
+				: undefined,
+		);
+		const out = await exportItems(CFG, { format: "bibtex", itemKeys: ["A", "B"] });
+		assert.equal(out, "@misc{A,}\n");
+		handle.restore();
+	});
+
+	it("exportItems targets a collection path when collectionKey is given", async () => {
+		const handle = mockFetch((c) =>
+			c.url.includes("/users/42/collections/CK/items?") && c.url.includes("format=csljson")
+				? { status: 200, body: "[]" }
+				: undefined,
+		);
+		const out = await exportItems(CFG, { format: "csljson", collectionKey: "CK" });
+		assert.equal(out, "[]");
+		handle.restore();
+	});
+
+	it("exportItems uses format=bib for the bibliography format", async () => {
+		const handle = mockFetch((c) =>
+			c.url.includes("format=bib") ? { status: 200, body: "<div>ref</div>" } : undefined,
+		);
+		const out = await exportItems(CFG, { format: "bib", itemKeys: ["A"] });
+		assert.equal(out, "<div>ref</div>");
 		handle.restore();
 	});
 });

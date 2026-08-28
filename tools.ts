@@ -6,14 +6,23 @@ import { ZOTERO_PROVIDER_ID } from "./provider.ts";
 import {
 	type ZoteroConfig,
 	type ZoteroItem,
+	addItemsToCollection,
+	createCollections,
+	deleteCollection,
 	deleteItem,
 	downloadAttachmentFile,
+	exportItems,
 	getChildren,
+	getCollection,
 	getItem,
 	itemTemplate,
+	listCollectionItems,
+	listCollections,
 	listTags,
+	removeItemsFromCollection,
 	searchItems,
 	setItemTags,
+	updateCollection,
 	updateItem,
 	uploadAttachmentFile,
 	createItems,
@@ -60,6 +69,16 @@ function summarize(items: ZoteroItem[]): unknown[] {
 
 function textResult(obj: unknown) {
 	return { content: [{ type: "text" as const, text: JSON.stringify(obj, null, 2) }], details: {} };
+}
+
+/** Normalize the add/remove item-membership params into the shape the client expects. */
+function normalizeMembershipItems(
+	params: { items?: Array<{ key: string; version: number; collections: string[] }>; itemKeys?: string[] },
+): Array<{ key: string; version: number; collections: string[] }> {
+	if (params.items?.length) return params.items;
+	throw new Error(
+		"items (array of { key, version, collections }) is required. Fetch each item's current version and collections via zotero_search or zotero_item get first.",
+	);
 }
 
 export function registerZoteroTools(pi: ExtensionAPI): void {
@@ -301,5 +320,157 @@ export function registerZoteroTools(pi: ExtensionAPI): void {
 					throw new Error(`Unknown action: ${params.action}`);
 			}
 		},
+	});
+
+	pi.registerTool({
+		name: "zotero_collection",
+		label: "Zotero Collections",
+		description:
+			"Manage Zotero collections (folders). Actions: " +
+			"'list' (top-level collections, or subcollections of a parent via parentKey), " +
+			"'get' (one collection by key), 'items' (items in a collection; top=true for top-level only), " +
+			"'create' (one or more collections: { name, parentCollection? }), 'rename' (patch name via key+version), " +
+			"'delete' (by key+version), 'add' (add items to a collection via itemKeys+items [{key,version,collections}]), " +
+			"'remove' (remove items from a collection).",
+		promptSnippet: "List, create, rename, delete Zotero collections and move items in/out.",
+		parameters: Type.Object({
+			action: StringEnum(["list", "get", "items", "create", "rename", "delete", "add", "remove"] as const, {
+				description: "Collection action to perform.",
+			}),
+			collectionKey: Type.Optional(
+				Type.String({ description: "Collection key. Required for get/items/rename/delete/add/remove; subcollections parent for list." }),
+			),
+			parentKey: Type.Optional(
+				Type.String({ description: "For list: list subcollections of this parent collection." }),
+			),
+			top: Type.Optional(Type.Boolean({ description: "For list: only top-level collections. For items: only top-level items." })),
+			name: Type.Optional(Type.String({ description: "For create/rename: the collection name." })),
+			parentCollection: Type.Optional(
+				Type.String({ description: "For create: parent collection key (omit/false for top-level)." }),
+			),
+			version: Type.Optional(
+				Type.Number({ description: "Current collection version (required for rename/delete)." }),
+			),
+			itemKeys: Type.Optional(Type.Array(Type.String(), { description: "For add/remove: item keys to add/remove." })),
+			items: Type.Optional(
+				Type.Array(
+					Type.Object({
+						key: Type.String(),
+						version: Type.Number(),
+						collections: Type.Array(Type.String()),
+					}),
+					{ description: "For add/remove: full item objects with current collections arrays (required so the patch preserves existing memberships)." },
+				),
+			),
+			limit: Type.Optional(Type.Number({ description: "Max results (default 50)." })),
+		}),
+		async execute(_id, params, signal, _onUpdate, ctx) {
+			const cfg = await resolveConfig(ctx);
+			switch (params.action) {
+				case "list": {
+					const cols = await listCollections(
+						cfg,
+						{ parentKey: params.parentKey, top: params.top, limit: params.limit ?? 50 },
+						signal,
+					);
+					return textResult({
+						count: cols.length,
+						collections: cols.map((c) => ({
+							key: c.key,
+							version: c.version,
+							name: c.data.name,
+							parentCollection: c.data.parentCollection,
+						})),
+					});
+				}
+				case "get": {
+					if (!params.collectionKey) throw new Error("collectionKey is required for get.");
+					return textResult(await getCollection(cfg, params.collectionKey, signal));
+				}
+				case "items": {
+					if (!params.collectionKey) throw new Error("collectionKey is required for items.");
+					const items = await listCollectionItems(
+						cfg,
+						params.collectionKey,
+						{ top: params.top, limit: params.limit ?? 50 },
+						signal,
+					);
+					return textResult({ count: items.length, items: summarize(items) });
+				}
+				case "create": {
+					if (!params.name) throw new Error("name is required for create.");
+					const toCreate = [{ name: params.name, parentCollection: params.parentCollection ?? false }];
+					const created = await createCollections(cfg, toCreate, signal);
+					return textResult({ created: created.map((c) => ({ key: c.key, version: c.version, name: c.data.name })) });
+				}
+				case "rename": {
+					if (!params.collectionKey) throw new Error("collectionKey is required for rename.");
+					if (params.version === undefined) throw new Error("version is required for rename.");
+					if (!params.name) throw new Error("name is required for rename.");
+					await updateCollection(cfg, params.collectionKey, params.version, { name: params.name }, signal);
+					return textResult({ renamed: params.collectionKey, name: params.name, ok: true });
+				}
+				case "delete": {
+					if (!params.collectionKey) throw new Error("collectionKey is required for delete.");
+					if (params.version === undefined) throw new Error("version is required for delete.");
+					await deleteCollection(cfg, params.collectionKey, params.version, signal);
+					return textResult({ deleted: params.collectionKey, ok: true });
+				}
+				case "add": {
+					if (!params.collectionKey) throw new Error("collectionKey is required for add.");
+					const items = normalizeMembershipItems(params);
+					await addItemsToCollection(cfg, params.collectionKey, items, signal);
+					return textResult({ addedTo: params.collectionKey, count: items.length, ok: true });
+				}
+				case "remove": {
+					if (!params.collectionKey) throw new Error("collectionKey is required for remove.");
+					const items = normalizeMembershipItems(params);
+					await removeItemsFromCollection(cfg, params.collectionKey, items, signal);
+					return textResult({ removedFrom: params.collectionKey, count: items.length, ok: true });
+				}
+				default:
+					throw new Error(`Unknown action: ${params.action}`);
+			}
+		},
+	});
+
+	pi.registerTool({
+		name: "zotero_export",
+		label: "Zotero Export",
+		description:
+			"Export Zotero items as a bibliography string (BibTeX, BibLaTeX, CSL JSON, RIS, CSV, MODS, COinS, Netscape bookmarks, or a formatted bibliography). " +
+			"Select items by itemKeys, or export an entire collection via collectionKey. With no itemKeys and no collectionKey, exports the whole library.",
+		promptSnippet: "Export Zotero items as BibTeX/CSL-JSON/etc.",
+		parameters: Type.Object({
+			format: StringEnum(
+				["bib", "bibtex", "biblatex", "csljson", "ris", "csv", "mods", "coins", "bookmarks"] as const,
+				{ description: "Export format. 'bib' returns a formatted bibliography; the rest return structured data." },
+			),
+			itemKeys: Type.Optional(
+				Type.Array(Type.String(), { description: "Specific item keys to export (recommended after a search)." }),
+			),
+			collectionKey: Type.Optional(
+				Type.String({ description: "Export all items in this collection. Ignored when itemKeys is given." }),
+			),
+		}),
+		async execute(_id, params, signal, _onUpdate, ctx) {
+			const cfg = await resolveConfig(ctx);
+			if (!params.itemKeys?.length && !params.collectionKey) {
+				throw new Error(
+					"Provide itemKeys (recommended) or collectionKey. Exporting the entire library can be very large and is discouraged.",
+				);
+			}
+			const exported = await exportItems(
+				cfg,
+				{
+					format: params.format,
+					itemKeys: params.itemKeys,
+					collectionKey: params.collectionKey,
+					signal,
+				},
+				signal,
+			);
+			return textResult({ format: params.format, chars: exported.length, content: exported });
+			},
 	});
 }

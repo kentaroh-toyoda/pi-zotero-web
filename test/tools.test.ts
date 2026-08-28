@@ -221,3 +221,113 @@ describe("tools.zotero_tags", () => {
 		handle.restore();
 	});
 });
+
+describe("tools.zotero_collection", () => {
+	it("list returns summarized collections", async () => {
+		const { tools, ctx } = harness();
+		const handle = mockFetch((c) =>
+			c.url.includes("/users/42/collections?") && !c.url.includes("/collections/")
+				? { status: 200, body: [{ key: "C1", version: 1, data: { name: "Read", parentCollection: false } }] }
+				: undefined,
+		);
+		const res = await tools.get("zotero_collection")!.execute("id", { action: "list" }, undefined, undefined, ctx(AUTH));
+		const parsed = JSON.parse((res.content[0] as { text: string }).text);
+		assert.equal(parsed.count, 1);
+		assert.equal(parsed.collections[0].name, "Read");
+		handle.restore();
+	});
+
+	it("create requires name", async () => {
+		const { tools, ctx } = harness();
+		await assert.rejects(
+			() => tools.get("zotero_collection")!.execute("id", { action: "create" }, undefined, undefined, ctx(AUTH)),
+			/name is required/,
+		);
+	});
+
+	it("rename requires version", async () => {
+		const { tools, ctx } = harness();
+		await assert.rejects(
+			() => tools.get("zotero_collection")!.execute("id", { action: "rename", collectionKey: "C", name: "n" }, undefined, undefined, ctx(AUTH)),
+			/version is required/,
+		);
+	});
+
+	it("rename patches the name with the version", async () => {
+		const { tools, ctx } = harness();
+		const handle = mockFetch((c) =>
+			c.method === "PATCH" && c.url.endsWith("/users/42/collections/C") ? { status: 200, body: "" } : undefined,
+		);
+		const res = await tools
+			.get("zotero_collection")!
+			.execute("id", { action: "rename", collectionKey: "C", version: 8, name: "Renamed" }, undefined, undefined, ctx(AUTH));
+		assert.equal(handle.calls[0]!.headers["if-unmodified-since-version"], "8");
+		const parsed = JSON.parse((res.content[0] as { text: string }).text);
+		assert.equal(parsed.ok, true);
+		handle.restore();
+	});
+
+	it("delete requires version", async () => {
+		const { tools, ctx } = harness();
+		await assert.rejects(
+			() => tools.get("zotero_collection")!.execute("id", { action: "delete", collectionKey: "C" }, undefined, undefined, ctx(AUTH)),
+			/version is required/,
+		);
+	});
+
+	it("items requires collectionKey", async () => {
+		const { tools, ctx } = harness();
+		await assert.rejects(
+			() => tools.get("zotero_collection")!.execute("id", { action: "items" }, undefined, undefined, ctx(AUTH)),
+			/collectionKey is required/,
+		);
+	});
+
+	it("add requires items array", async () => {
+		const { tools, ctx } = harness();
+		await assert.rejects(
+			() => tools.get("zotero_collection")!.execute("id", { action: "add", collectionKey: "C" }, undefined, undefined, ctx(AUTH)),
+			/items .* is required/,
+		);
+	});
+
+	it("add merges memberships via item patches", async () => {
+		const { tools, ctx } = harness();
+		const handle = mockFetch((c) =>
+			c.method === "PATCH" && c.url.endsWith("/users/42/items/I1") ? { status: 200, body: "" } : undefined,
+		);
+		await tools
+			.get("zotero_collection")!
+			.execute("id", { action: "add", collectionKey: "COL", items: [{ key: "I1", version: 3, collections: ["OTHER"] }] }, undefined, undefined, ctx(AUTH));
+		const body = JSON.parse(handle.calls[0]!.body as string);
+		assert.deepEqual(body.collections, ["OTHER", "COL"]);
+		handle.restore();
+	});
+});
+
+describe("tools.zotero_export", () => {
+	it("requires itemKeys or collectionKey", async () => {
+		const { tools, ctx } = harness();
+		await assert.rejects(
+			() => tools.get("zotero_export")!.execute("id", { format: "bibtex" }, undefined, undefined, ctx(AUTH)),
+			/Provide itemKeys .* or collectionKey/,
+		);
+	});
+
+	it("returns the exported string with metadata", async () => {
+		const { tools, ctx } = harness();
+		const handle = mockFetch((c) =>
+			c.url.includes("format=bibtex") && c.url.includes("itemKey=A")
+				? { status: 200, body: "@misc{A,}" }
+				: undefined,
+		);
+		const res = await tools
+			.get("zotero_export")!
+			.execute("id", { format: "bibtex", itemKeys: ["A"] }, undefined, undefined, ctx(AUTH));
+		const parsed = JSON.parse((res.content[0] as { text: string }).text);
+		assert.equal(parsed.format, "bibtex");
+		assert.equal(parsed.content, "@misc{A,}");
+		assert.equal(parsed.chars, 9);
+		handle.restore();
+	});
+});
