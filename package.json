@@ -1,9 +1,24 @@
 {
-  "name": "pi-zotero-ext",
+  "name": "pi-zotero-web",
   "version": "0.1.0",
-  "private": true,
+  "description": "Zotero Web API integration for pi: CRUD on items + PDFs, library search, tags & collections, citation export, full-text, and /login zotero key management.",
   "type": "module",
-  "description": "Zotero Web API integration for pi: CRUD on items + PDFs, library search, and /login zotero key management.",
+  "main": "./index.ts",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "zotero"
+  ],
+  "author": "Kentaroh Toyoda <kentaroh.toyoda@gmail.com> (https://www.linkedin.com/in/kentaroh-toyoda)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kentaroh-toyoda/pi-zotero-web.git"
+  },
+  "homepage": "https://github.com/kentaroh-toyoda/pi-zotero-web",
+  "bugs": {
+    "url": "https://github.com/kentaroh-toyoda/pi-zotero-web/issues"
+  },
   "pi": {
     "extensions": [
       "./index.ts"
@@ -11,15 +26,26 @@
   },
   "scripts": {
     "test": "node --import tsx --test test/*.test.ts",
-    "check": "node --import tsx --test test/*.test.ts"
+    "check": "node --import tsx --test test/*.test.ts",
+    "prepublishOnly": "npm test"
   },
-  "keywords": [
-    "pi-package",
-    "pi-extension",
-    "zotero"
-  ],
-  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "typebox": "*"
+  },
   "devDependencies": {
     "tsx": "^4.23.0"
-  }
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "index.ts",
+    "provider.ts",
+    "client.ts",
+    "tools.ts",
+    "README.md",
+    "package.json"
+  ]
 }
