@@ -1,0 +1,25 @@
+{
+  "name": "pi-zotero-ext",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Zotero Web API integration for pi: CRUD on items + PDFs, library search, and /login zotero key management.",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --import tsx --test test/*.test.ts",
+    "check": "node --import tsx --test test/*.test.ts"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "zotero"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "tsx": "^4.23.0"
+  }
+}

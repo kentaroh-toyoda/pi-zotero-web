@@ -1,0 +1,303 @@
+import { createHash } from "node:crypto";
+import { basename } from "node:path";
+import { readFile } from "node:fs/promises";
+import { ZOTERO_API_BASE } from "./provider.ts";
+
+/** Resolved Zotero credentials used to authenticate Web API requests. */
+export interface ZoteroConfig {
+	apiKey: string;
+	/** Numeric user id for the personal library, resolved from /keys/current during login. */
+	userId: string;
+	/** Optional group library id. When set, group libraries are used instead of the personal library. */
+	groupId?: string;
+}
+
+export interface ZoteroItem {
+	key: string;
+	version: number;
+	library?: unknown;
+	data: Record<string, unknown> & { key?: string; version?: number; itemType?: string };
+}
+
+export class ZoteroError extends Error {
+	constructor(
+		message: string,
+		readonly status: number,
+		readonly body: string,
+	) {
+		super(`${message} (${status}): ${body || ""}`.trim());
+		this.name = "ZoteroError";
+	}
+}
+
+function prefix(cfg: ZoteroConfig): string {
+	return cfg.groupId ? `/groups/${cfg.groupId}` : `/users/${cfg.userId}`;
+}
+
+function baseHeaders(cfg: ZoteroConfig): Record<string, string> {
+	return {
+		"Zotero-API-Key": cfg.apiKey,
+		"Zotero-API-Version": "3",
+	};
+}
+
+async function zoteroFetch(
+	cfg: ZoteroConfig,
+	path: string,
+	init: RequestInit & { signal?: AbortSignal } = {},
+): Promise<Response> {
+	const res = await fetch(`${ZOTERO_API_BASE}${path}`, {
+		...init,
+		headers: { ...baseHeaders(cfg), ...(init.headers ?? {}) },
+	});
+	if (!res.ok) {
+		const body = await res.text().catch(() => "");
+		throw new ZoteroError(`Zotero API request to ${path} failed`, res.status, body);
+	}
+	return res;
+}
+
+export interface SearchParams {
+	q?: string;
+	qmode?: "titleCreatorYear" | "everything";
+	itemType?: string;
+	collectionKey?: string;
+	tag?: string;
+	limit?: number;
+	since?: number;
+	/** Return only top-level items (excludes child notes/attachments). */
+	top?: boolean;
+}
+
+function buildQuery(params: SearchParams): string {
+	const q = new URLSearchParams();
+	if (params.q) q.set("q", params.q);
+	if (params.qmode) q.set("qmode", params.qmode);
+	if (params.itemType) q.set("itemType", params.itemType);
+	if (params.tag) q.set("tag", params.tag);
+	if (params.limit !== undefined) q.set("limit", String(params.limit));
+	if (params.since !== undefined) q.set("since", String(params.since));
+	q.set("format", "json");
+	return q.toString();
+}
+
+/** Search the library for items. Returns full item objects with key/version/data. */
+export async function searchItems(
+	cfg: ZoteroConfig,
+	params: SearchParams,
+	signal?: AbortSignal,
+): Promise<ZoteroItem[]> {
+	const base = prefix(cfg);
+	const path = params.collectionKey
+		? `${base}/collections/${params.collectionKey}/items`
+		: params.top
+			? `${base}/items/top`
+			: `${base}/items`;
+	const res = await zoteroFetch(cfg, `${path}?${buildQuery(params)}`, { signal });
+	return (await res.json()) as ZoteroItem[];
+}
+
+/** Get a single item by key. */
+export async function getItem(
+	cfg: ZoteroConfig,
+	itemKey: string,
+	signal?: AbortSignal,
+): Promise<ZoteroItem> {
+	const res = await zoteroFetch(cfg, `${prefix(cfg)}/items/${itemKey}?format=json`, { signal });
+	return (await res.json()) as ZoteroItem;
+}
+
+/** Child items (notes/attachments) of a parent item. */
+export async function getChildren(
+	cfg: ZoteroConfig,
+	itemKey: string,
+	signal?: AbortSignal,
+): Promise<ZoteroItem[]> {
+	const res = await zoteroFetch(cfg, `${prefix(cfg)}/items/${itemKey}/children?format=json`, {
+		signal,
+	});
+	return (await res.json()) as ZoteroItem[];
+}
+
+/** Fetch an item template for a given itemType (helps build create/update payloads). */
+export async function itemTemplate(
+	itemType: string,
+	linkMode?: string,
+	signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+	const q = new URLSearchParams({ itemType });
+	if (linkMode) q.set("linkMode", linkMode);
+	const res = await fetch(`${ZOTERO_API_BASE}/items/new?${q.toString()}`, { signal });
+	if (!res.ok) throw new ZoteroError("Failed to fetch item template", res.status, await res.text());
+	return (await res.json()) as Record<string, unknown>;
+}
+
+/** Create one or more items. Returns the created items with key/version. */
+export async function createItems(
+	cfg: ZoteroConfig,
+	items: Record<string, unknown>[],
+	signal?: AbortSignal,
+): Promise<ZoteroItem[]> {
+	const token = crypto.randomUUID();
+	const res = await zoteroFetch(cfg, `${prefix(cfg)}/items`, {
+		method: "POST",
+		signal,
+		headers: {
+			"Content-Type": "application/json",
+			"Zotero-Write-Token": token,
+		},
+		body: JSON.stringify(items),
+	});
+	return (await res.json()) as ZoteroItem[];
+}
+
+/** Patch an item's fields. `version` is the current item version (If-Unmodified-Since-Version). */
+export async function updateItem(
+	cfg: ZoteroConfig,
+	itemKey: string,
+	version: number,
+	patch: Record<string, unknown>,
+	signal?: AbortSignal,
+): Promise<void> {
+	await zoteroFetch(cfg, `${prefix(cfg)}/items/${itemKey}`, {
+		method: "PATCH",
+		signal,
+		headers: {
+			"Content-Type": "application/json",
+			"If-Unmodified-Since-Version": String(version),
+		},
+		body: JSON.stringify(patch),
+	});
+}
+
+/** Delete an item. `version` is the current item version. */
+export async function deleteItem(
+	cfg: ZoteroConfig,
+	itemKey: string,
+	version: number,
+	signal?: AbortSignal,
+): Promise<void> {
+	await zoteroFetch(cfg, `${prefix(cfg)}/items/${itemKey}`, {
+		method: "DELETE",
+		signal,
+		headers: { "If-Unmodified-Since-Version": String(version) },
+	});
+}
+
+interface UploadAuthorization {
+	url: string;
+	contentType: string;
+	prefix: string;
+	suffix: string;
+	uploadKey: string;
+	exists?: number;
+	params?: Array<{ name: string; value: string }>;
+}
+
+/**
+ * Upload a local file as a stored attachment (imported_file) under a parent item.
+ * Implements the full Zotero Web API file upload flow:
+ *   1. Create the attachment item.
+ *   2. Get upload authorization (POST .../file).
+ *   3. POST prefix+file+suffix to the returned S3 url.
+ *   4. Register the upload.
+ * Returns the created attachment item.
+ */
+export async function uploadAttachmentFile(
+	cfg: ZoteroConfig,
+	opts: { parentKey: string; filePath: string; title?: string; contentType?: string },
+	signal?: AbortSignal,
+): Promise<ZoteroItem> {
+	const bytes = await readFile(opts.filePath);
+	const filename = basename(opts.filePath);
+	const md5 = createHash("md5").update(bytes).digest("hex");
+	const contentType = opts.contentType ?? "application/pdf";
+
+	// 1. Create the attachment item.
+	const [created] = await createItems(
+		cfg,
+		[
+			{
+				itemType: "attachment",
+				parentItem: opts.parentKey,
+				linkMode: "imported_file",
+				title: opts.title ?? filename,
+				contentType,
+				charset: "",
+				tags: [],
+				relations: {},
+			},
+		],
+		signal,
+	);
+	const attachKey = created.key;
+
+	// 2. Get upload authorization.
+	const authBody = new URLSearchParams({
+		md5,
+		filename,
+		filesize: String(bytes.length),
+		mtime: String(Date.now()),
+	});
+	const authRes = await zoteroFetch(cfg, `${prefix(cfg)}/items/${attachKey}/file`, {
+		method: "POST",
+		signal,
+		headers: {
+			"Content-Type": "application/x-www-form-urlencoded",
+			"If-None-Match": "*",
+		},
+		body: authBody.toString(),
+	});
+	const auth = (await authRes.json()) as UploadAuthorization;
+
+	// File already exists server-side; no upload needed.
+	if (auth.exists) {
+		return created;
+	}
+
+	// 3. Upload prefix + file + suffix to S3.
+	const body = Buffer.concat([
+		Buffer.from(auth.prefix, "latin1"),
+		typeof bytes === "string" ? Buffer.from(bytes) : Buffer.from(bytes),
+		Buffer.from(auth.suffix, "latin1"),
+	]);
+	const s3Res = await fetch(auth.url, {
+		method: "POST",
+		signal,
+		headers: { "Content-Type": auth.contentType },
+		body,
+	});
+	if (!s3Res.ok) {
+		const s3body = await s3Res.text().catch(() => "");
+		throw new ZoteroError("S3 file upload failed", s3Res.status, s3body);
+	}
+
+	// 4. Register the upload.
+	await zoteroFetch(cfg, `${prefix(cfg)}/items/${attachKey}/file`, {
+		method: "POST",
+		signal,
+		headers: {
+			"Content-Type": "application/x-www-form-urlencoded",
+			"If-None-Match": "*",
+		},
+		body: new URLSearchParams({ upload: auth.uploadKey }).toString(),
+	});
+
+	return created;
+}
+
+/**
+ * Download an attachment's file bytes to a local path. Uses the ETag response
+ * header as the attachment md5 (required for later If-Match modifications).
+ */
+export async function downloadAttachmentFile(
+	cfg: ZoteroConfig,
+	opts: { itemKey: string; outputPath: string },
+	signal?: AbortSignal,
+): Promise<{ path: string; md5?: string; bytes: number }> {
+	const { writeFile } = await import("node:fs/promises");
+	const res = await zoteroFetch(cfg, `${prefix(cfg)}/items/${opts.itemKey}/file`, { signal });
+	const buf = Buffer.from(await res.arrayBuffer());
+	await writeFile(opts.outputPath, buf);
+	return { path: opts.outputPath, md5: res.headers.get("ETag") ?? undefined, bytes: buf.length };
+}
