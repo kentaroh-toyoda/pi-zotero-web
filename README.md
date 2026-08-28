@@ -2,9 +2,12 @@
 
 Zotero integration for [pi](https://pi.dev) via the Zotero Web API.
 
-- **CRUD on paper metadata + PDFs** — create, read, update, delete items and attachments; upload/download PDF files.
+- **CRUD on paper metadata + PDFs** — create, read, update, delete items and attachments; upload/download PDF files (full 4-step Zotero file upload flow).
 - **Library search** — keyword, title/author/year, and full-text (`qmode=everything`) search.
-- **API key management via `/login zotero`** — the key (and resolved user id) are stored in `~/.pi/agent/auth.json`; `/logout zotero` removes it.
+- **Tags & collections** — manage tags, list/create/rename/delete collections, and move items in/out of collections.
+- **Citation export** — export items as BibTeX, BibLaTeX, CSL JSON, RIS, CSV, MODS, COinS, bookmarks, or a formatted bibliography.
+- **Schema & full-text** — read the item-type/field/creator schema, and get/set extracted full-text content for attachments (enables headless full-text search).
+- **API key management via `/login zotero`** — the key (and resolved user id) are stored in `~/.pi/agent/auth.json`; the login re-prompts up to 3 times on a rejected key; `/logout zotero` removes it.
 
 ## Requirements
 
@@ -66,7 +69,7 @@ All tools are registered for the agent to call automatically. You can also promp
 
 Create a paper from a DOI/metadata:
 
-1. `zotero_template` with `itemType=journalArticle` → base object.
+1. `zotero_template` (or `zotero_schema` for exotic types) → base object.
 2. Fill `title`, `creators`, `abstractNote`, `DOI`, `date`, etc. (the agent can fetch these from the web).
 3. `zotero_item` with `action=create`, passing the filled item.
 
@@ -77,6 +80,15 @@ Attach a PDF to an existing item:
 Download a PDF:
 
 1. `zotero_attachment` with `action=download`, `itemKey=<attachmentKey>`, `filePath=./paper.pdf`.
+
+Organize and export:
+
+1. `zotero_collection` `action=create` → new collection; `action=add` to file items into it (pass each item's current `version` + `collections`).
+2. `zotero_export` with `format=bibtex`, `collectionKey=<key>` → BibTeX for the whole collection.
+
+Make an uploaded PDF searchable headlessly:
+
+1. Extract text locally (e.g. via a PDF tool), then `zotero_fulltext` `action=set` with `content` + `indexedChars`/`totalChars` (text) or `indexedPages`/`totalPages` (PDF). Now `zotero_search` with `qmode=everything` will find it.
 
 ## Testing
 
