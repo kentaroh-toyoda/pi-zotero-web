@@ -99,6 +99,77 @@ function coerceItem(value: unknown): unknown {
 	return value;
 }
 
+function normalizeDoi(doi: unknown): string | undefined {
+	if (typeof doi !== "string") return undefined;
+	const trimmed = doi.trim();
+	if (!trimmed) return undefined;
+	// Zotero stores DOIs without the "https://doi.org/" prefix; normalize for comparison.
+	return trimmed.replace(/^https?:\/\/doi\.org\//i, "").replace(/^doi:/i, "").trim().toLowerCase();
+}
+
+/** Normalize a title for loose comparison (lowercase, collapse whitespace/punctuation). */
+function normalizeTitle(title: unknown): string | undefined {
+	if (typeof title !== "string") return undefined;
+	const cleaned = title.trim().toLowerCase();
+	if (!cleaned) return undefined;
+	return cleaned.replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
+}
+
+/** Extract a comparable first-author surname from a Zotero creators array. */
+function firstAuthorSurname(creators: unknown): string | undefined {
+	if (!Array.isArray(creators)) return undefined;
+	const first = creators.find((c) => c && typeof c === "object" && (c as { creatorType?: string }).creatorType === "author") ??
+		creators.find((c) => c && typeof c === "object");
+	if (!first || typeof first !== "object") return undefined;
+	const c = first as { lastName?: string; name?: string; firstName?: string };
+	return (c.lastName ?? c.name ?? c.firstName ?? "").trim().toLowerCase() || undefined;
+}
+
+/**
+ * Search the library for an existing item matching the candidate, to avoid creating a duplicate.
+ * Match priority: DOI (exact), then title + first-author surname.
+ * Returns the existing ZoteroItem or undefined.
+ */
+async function findExistingItem(
+	cfg: ZoteroConfig,
+	candidate: Record<string, unknown>,
+	signal?: AbortSignal,
+): Promise<ZoteroItem | undefined> {
+	const data = (candidate.data ?? candidate) as Record<string, unknown>;
+	const doi = normalizeDoi(data.DOI);
+	const title = normalizeTitle(data.title);
+	const author = firstAuthorSurname(data.creators);
+
+	// Skip dedup for items that have no usable identity (e.g. notes, attachments, standalone).
+	if (!doi && !title) return undefined;
+
+	const matchItem = (item: ZoteroItem): boolean => {
+		const d = item.data;
+		const itemDoi = normalizeDoi(d.DOI);
+		if (doi && itemDoi === doi) return true;
+		const itemTitle = normalizeTitle(d.title);
+		if (title && itemTitle === title) {
+			// Require author agreement when both sides have one, to avoid false positives
+			// on generic titles. If either side lacks an author, title alone is accepted.
+			const itemAuthor = firstAuthorSurname(d.creators);
+			if (!author || !itemAuthor || author === itemAuthor) return true;
+		}
+		return false;
+	};
+
+	// DOI search: Zotero's q parameter matches DOI tokens, but we search broadly and filter.
+	const queries: Array<{ q: string; qmode: "titleCreatorYear" }> = [];
+	if (doi) queries.push({ q: doi, qmode: "titleCreatorYear" });
+	if (title) queries.push({ q: data.title as string, qmode: "titleCreatorYear" });
+
+	for (const q of queries) {
+		const results = await searchItems(cfg, { ...q, top: true, limit: 25 }, signal);
+		const hit = results.find(matchItem);
+		if (hit) return hit;
+	}
+	return undefined;
+}
+
 /** Normalize the add/remove item-membership params into the shape the client expects. */
 function normalizeMembershipItems(
 	params: { items?: Array<{ key: string; version: number; collections: string[] }>; itemKeys?: string[] },
@@ -152,8 +223,9 @@ export function registerZoteroTools(pi: ExtensionAPI): void {
 		description:
 			"Create, read, update, or delete a Zotero item (paper/note/etc.). " +
 			"Actions: 'get' (fetch by key), 'create' (pass a full item object), 'update' (patch fields by key+version), 'delete' (by key+version). " +
+			"On create, the library is first searched for an existing item with the same DOI (or title + first author); if a match is found it is returned (with duplicate:true) instead of creating a new entry. Pass forceCreate:true to skip this check. " +
 			"Use zotero_template first to build a valid create/update payload.",
-		promptSnippet: "Read, create, update, or delete a Zotero item.",
+		promptSnippet: "Read, create, update, or delete a Zotero item (dedup on create).",
 		parameters: Type.Object({
 			action: StringEnum(["get", "create", "update", "delete"] as const, {
 				description: "CRUD action to perform.",
@@ -164,6 +236,12 @@ export function registerZoteroTools(pi: ExtensionAPI): void {
 			),
 			item: Type.Optional(
 				Type.Any({ description: "Full item object for create, or patch fields for update (e.g. {title, creators, abstractNote, tags})." }),
+			),
+			forceCreate: Type.Optional(
+				Type.Boolean({
+					description:
+						"For create: skip the built-in duplicate check and always create a new item. Defaults to false, which searches the library for an existing item with the same DOI (or title + first author) and returns it instead of creating a duplicate.",
+				}),
 			),
 		}),
 		async execute(_id, params, signal, _onUpdate, ctx) {
@@ -180,6 +258,15 @@ export function registerZoteroTools(pi: ExtensionAPI): void {
 						throw new Error("item (object or array of objects) is required for create.");
 					}
 					const items = Array.isArray(item) ? item : [item];
+					// Dedup unless explicitly forced. For a single item, check the library for an
+					// existing match (by DOI, then by title + first author) and return it instead of
+					// creating a duplicate. Batches are created as-is to avoid ambiguous matches.
+					if (!params.forceCreate && items.length === 1) {
+						const existing = await findExistingItem(cfg, items[0] as Record<string, unknown>, signal);
+						if (existing) {
+							return textResult({ duplicate: true, existing: summarize([existing])[0], created: [] });
+						}
+					}
 					const created = await createItems(cfg, items as Record<string, unknown>[], signal);
 					return textResult({ created: summarize(created) });
 				}

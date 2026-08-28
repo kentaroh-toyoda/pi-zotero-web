@@ -1,7 +1,7 @@
 {
   "name": "pi-zotero-web",
-  "version": "0.1.2",
-  "description": "Zotero Web API integration for pi: CRUD on items + PDFs, library search, tags & collections, citation export, full-text, and /login zotero key management.",
+  "version": "0.2.0",
+  "description": "Zotero Web API integration for pi: CRUD on items + PDFs, library search, tags & collections, citation export, full-text, duplicate detection on create, and /login zotero key management.",
   "type": "module",
   "main": "./index.ts",
   "keywords": [

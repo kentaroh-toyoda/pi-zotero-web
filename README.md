@@ -57,7 +57,7 @@ All tools are registered for the agent to call automatically. You can also promp
 | Tool | Actions / params | Description |
 |------|------------------|-------------|
 | `zotero_search` | `q`, `qmode`, `itemType`, `collectionKey`, `tag`, `limit`, `top` | Search the library. `qmode=everything` includes full text. Returns key/version/metadata. |
-| `zotero_item` | `action=get\|create\|update\|delete`, `itemKey`, `version`, `item` | CRUD on an item. Use the `version` returned by search/get for update/delete. |
+| `zotero_item` | `action=get\|create\|update\|delete`, `itemKey`, `version`, `item`, `forceCreate` | CRUD on an item. Use the `version` returned by search/get for update/delete. On `create`, the library is first searched for an existing item with the same DOI (or title + first author); a match is returned with `duplicate:true` instead of creating. Pass `forceCreate:true` to bypass. |
 | `zotero_template` | `itemType`, `linkMode` | Fetch an item template to build valid create/update payloads. |
 | `zotero_attachment` | `action=list\|upload\|download\|delete`, `itemKey`/`parentKey`, `filePath`, `version`, `title`, `contentType` | Manage PDF/attachment files. Upload reads a local file; download writes to a local path. |
 | `zotero_tags` | `action=list\|get\|set`, `itemKey`, `version`, `tags`, `limit` | List library tags or tags on an item, or replace an item's full tags array (`tags: [{tag, type:0\|1}]`, type 0=manual, 1=automatic). |
@@ -73,6 +73,8 @@ Create a paper from a DOI/metadata:
 1. `zotero_template` (or `zotero_schema` for exotic types) → base object.
 2. Fill `title`, `creators`, `abstractNote`, `DOI`, `date`, etc. (the agent can fetch these from the web).
 3. `zotero_item` with `action=create`, passing the filled item.
+
+> **Duplicate detection.** `create` checks the library for an existing item matching the new one (by DOI, then by normalized title + first author) and returns the existing entry with `duplicate:true` instead of creating a second copy. Pass `forceCreate:true` to always create. Batches (an array of items) always create without dedup to avoid ambiguous matches.
 
 Attach a PDF to an existing item:
 

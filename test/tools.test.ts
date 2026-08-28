@@ -66,11 +66,15 @@ describe("tools.zotero_item", () => {
 		handle.restore();
 	});
 
-	it("create posts the item object", async () => {
+	it("create posts the item object (no duplicate found)", async () => {
 		const { tools, ctx } = harness();
-		const handle = mockFetch((c) =>
-			c.method === "POST" && c.url.endsWith("/users/42/items") ? { status: 200, body: [{ key: "NEW", version: 1, data: {} }] } : undefined,
-		);
+		const handle = mockFetch((c) => {
+			// dedup search returns no matches, then the POST creates.
+			if (c.method === "GET" && c.url.includes("/users/42/items/top?")) return { status: 200, body: [] };
+			if (c.method === "POST" && c.url.endsWith("/users/42/items"))
+				return { status: 200, body: [{ key: "NEW", version: 1, data: {} }] };
+			return undefined;
+		});
 		const res = await tools
 			.get("zotero_item")!
 			.execute("id", { action: "create", item: { itemType: "journalArticle", title: "T" } }, undefined, undefined, ctx(AUTH));
@@ -83,6 +87,7 @@ describe("tools.zotero_item", () => {
 		const { tools, ctx } = harness();
 		let posted: unknown;
 		const handle = mockFetch((c) => {
+			if (c.method === "GET" && c.url.includes("/users/42/items/top?")) return { status: 200, body: [] };
 			if (c.method === "POST" && c.url.endsWith("/users/42/items")) {
 				posted = JSON.parse(c.body as string);
 				return { status: 200, body: [{ key: "NEW2", version: 1, data: {} }] };
@@ -114,6 +119,129 @@ describe("tools.zotero_item", () => {
 					.execute("id", { action: "create", item: "{not json" }, undefined, undefined, ctx(AUTH)),
 			/not valid JSON/,
 		);
+	});
+
+	it("create returns existing item when a DOI match is found (no POST)", async () => {
+		const { tools, ctx } = harness();
+		let posted = false;
+		const handle = mockFetch((c) => {
+			if (c.method === "POST") {
+				posted = true;
+				return { status: 200, body: [] };
+			}
+			// DOI search returns an existing match.
+			if (c.method === "GET" && c.url.includes("/users/42/items/top?"))
+				return {
+					status: 200,
+					body: [{ key: "EXIST", version: 7, data: { itemType: "journalArticle", DOI: "10.1000/xyz", title: "Same" } }],
+				};
+			return undefined;
+		});
+		const res = await tools
+			.get("zotero_item")!
+			.execute(
+				"id",
+				{ action: "create", item: { itemType: "journalArticle", DOI: "10.1000/xyz", title: "Same" } },
+				undefined,
+				undefined,
+				ctx(AUTH),
+			);
+		const parsed = JSON.parse((res.content[0] as { text: string }).text);
+		assert.equal(parsed.duplicate, true);
+		assert.equal(parsed.existing.key, "EXIST");
+		assert.equal(parsed.created.length, 0);
+		assert.equal(posted, false);
+		handle.restore();
+	});
+
+	it("create returns existing item when title + author match", async () => {
+		const { tools, ctx } = harness();
+		let posted = false;
+		const handle = mockFetch((c) => {
+			if (c.method === "POST") {
+				posted = true;
+				return { status: 200, body: [] };
+			}
+			if (c.method === "GET" && c.url.includes("/users/42/items/top?"))
+				return {
+					status: 200,
+					body: [
+						{
+							key: "OLD",
+							version: 2,
+							data: {
+								itemType: "journalArticle",
+								title: "A Great Paper",
+								creators: [{ creatorType: "author", lastName: "Smith" }],
+							},
+						},
+					],
+				};
+			return undefined;
+		});
+		const res = await tools
+			.get("zotero_item")!
+			.execute(
+				"id",
+				{
+					action: "create",
+					item: {
+						itemType: "journalArticle",
+						title: "a   great   paper!",
+						creators: [{ creatorType: "author", lastName: "smith" }],
+					},
+				},
+				undefined,
+				undefined,
+				ctx(AUTH),
+			);
+		const parsed = JSON.parse((res.content[0] as { text: string }).text);
+		assert.equal(parsed.duplicate, true);
+		assert.equal(parsed.existing.key, "OLD");
+		assert.equal(posted, false);
+		handle.restore();
+	});
+
+	it("create with forceCreate:true skips the dedup search", async () => {
+		const { tools, ctx } = harness();
+		let getSearched = false;
+		const handle = mockFetch((c) => {
+			if (c.method === "GET") {
+				getSearched = true;
+				return { status: 200, body: [] };
+			}
+			if (c.method === "POST" && c.url.endsWith("/users/42/items"))
+				return { status: 200, body: [{ key: "FORCED", version: 1, data: {} }] };
+			return undefined;
+		});
+		const res = await tools
+			.get("zotero_item")!
+			.execute(
+				"id",
+				{ action: "create", item: { itemType: "journalArticle", DOI: "10.1/abc", title: "X" }, forceCreate: true },
+				undefined,
+				undefined,
+				ctx(AUTH),
+			);
+		const parsed = JSON.parse((res.content[0] as { text: string }).text);
+		assert.equal(parsed.created[0].key, "FORCED");
+		assert.equal(getSearched, false);
+		handle.restore();
+	});
+
+	it("create with an item array skips dedup and creates all", async () => {
+		const { tools, ctx } = harness();
+		const handle = mockFetch((c) => {
+			if (c.method === "POST" && c.url.endsWith("/users/42/items"))
+				return { status: 200, body: [{ key: "A", version: 1, data: {} }, { key: "B", version: 1, data: {} }] };
+			return undefined;
+		});
+		const res = await tools
+			.get("zotero_item")!
+			.execute("id", { action: "create", item: [{ itemType: "journalArticle", title: "T1" }, { itemType: "journalArticle", title: "T2" }] }, undefined, undefined, ctx(AUTH));
+		const parsed = JSON.parse((res.content[0] as { text: string }).text);
+		assert.equal(parsed.created.length, 2);
+		handle.restore();
 	});
 
 	it("update requires version", async () => {
