@@ -79,6 +79,43 @@ describe("tools.zotero_item", () => {
 		handle.restore();
 	});
 
+	it("create accepts a JSON-stringified item (provider serialization fallback)", async () => {
+		const { tools, ctx } = harness();
+		let posted: unknown;
+		const handle = mockFetch((c) => {
+			if (c.method === "POST" && c.url.endsWith("/users/42/items")) {
+				posted = JSON.parse(c.body as string);
+				return { status: 200, body: [{ key: "NEW2", version: 1, data: {} }] };
+			}
+			return undefined;
+		});
+		const res = await tools
+			.get("zotero_item")!
+			.execute(
+				"id",
+				{ action: "create", item: JSON.stringify({ itemType: "preprint", title: "Str" }) },
+				undefined,
+				undefined,
+				ctx(AUTH),
+			);
+		const parsed = JSON.parse((res.content[0] as { text: string }).text);
+		assert.equal(parsed.created[0].key, "NEW2");
+		assert.equal(Array.isArray(posted), true);
+		assert.equal((posted as Array<{ title: string }>)[0]!.title, "Str");
+		handle.restore();
+	});
+
+	it("create rejects an invalid JSON string item with a helpful error", async () => {
+		const { tools, ctx } = harness();
+		await assert.rejects(
+			() =>
+				tools
+					.get("zotero_item")!
+					.execute("id", { action: "create", item: "{not json" }, undefined, undefined, ctx(AUTH)),
+			/not valid JSON/,
+		);
+	});
+
 	it("update requires version", async () => {
 		const { tools, ctx } = harness();
 		await assert.rejects(

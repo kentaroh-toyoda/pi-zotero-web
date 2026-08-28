@@ -78,6 +78,27 @@ function textResult(obj: unknown) {
 	return { content: [{ type: "text" as const, text: JSON.stringify(obj, null, 2) }], details: {} };
 }
 
+/**
+ * Normalize the `item` argument for create/update.
+ *
+ * Some providers serialize an untyped (`Type.Any()`) object parameter as a
+ * JSON string rather than a parsed object, and pi's TypeBox `Value.Convert`
+ * leaves `Type.Any()` values untouched, so the string reaches `execute()` as-is.
+ * Parse it back into an object here so the tool is robust to both shapes.
+ */
+function coerceItem(value: unknown): unknown {
+	if (typeof value === "string") {
+		try {
+			return JSON.parse(value);
+		} catch {
+			throw new Error(
+				"item was passed as a string but is not valid JSON. Pass an object (or array of objects) for create/update.",
+			);
+		}
+	}
+	return value;
+}
+
 /** Normalize the add/remove item-membership params into the shape the client expects. */
 function normalizeMembershipItems(
 	params: { items?: Array<{ key: string; version: number; collections: string[] }>; itemKeys?: string[] },
@@ -154,20 +175,22 @@ export function registerZoteroTools(pi: ExtensionAPI): void {
 					return textResult(item);
 				}
 				case "create": {
-					if (!params.item || typeof params.item !== "object") {
+					const item = coerceItem(params.item);
+					if (!item || typeof item !== "object") {
 						throw new Error("item (object or array of objects) is required for create.");
 					}
-					const items = Array.isArray(params.item) ? params.item : [params.item];
-					const created = await createItems(cfg, items, signal);
+					const items = Array.isArray(item) ? item : [item];
+					const created = await createItems(cfg, items as Record<string, unknown>[], signal);
 					return textResult({ created: summarize(created) });
 				}
 				case "update": {
 					if (!params.itemKey) throw new Error("itemKey is required for update.");
 					if (params.version === undefined) throw new Error("version is required for update.");
-					if (!params.item || typeof params.item !== "object") {
+					const item = coerceItem(params.item);
+					if (!item || typeof item !== "object") {
 						throw new Error("item (patch object) is required for update.");
 					}
-					await updateItem(cfg, params.itemKey, params.version, params.item, signal);
+					await updateItem(cfg, params.itemKey, params.version, item as Record<string, unknown>, signal);
 					return textResult({ updated: params.itemKey, ok: true });
 				}
 				case "delete": {
