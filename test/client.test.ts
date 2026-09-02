@@ -343,17 +343,37 @@ describe("client collections", () => {
 		handle.restore();
 	});
 
-	it("createCollections POSTs with a write token", async () => {
+	it("createCollections POSTs with a write token and parses the multi-object write response", async () => {
 		const handle = mockFetch((c) =>
 			c.method === "POST" && c.url.endsWith("/users/42/collections")
-				? { status: 200, body: [{ key: "NC", version: 1, data: { name: "New" } }] }
+				? json(200, {
+						successful: { "0": { key: "NC", version: 1, data: { name: "New" } } },
+						unchanged: {},
+						failed: {},
+					})
 				: undefined,
 		);
 		const created = await createCollections(CFG, [{ name: "New" }]);
 		const call = handle.calls[0];
 		assert.equal(created.length, 1);
+		assert.equal(created[0]!.key, "NC");
+		assert.equal(created[0]!.data.name, "New");
 		assert.ok(call!.headers["zotero-write-token"]);
 		assert.match(call!.body as string, /New/);
+		handle.restore();
+	});
+
+	it("createCollections throws on a failed write entry", async () => {
+		const handle = mockFetch((c) =>
+			c.method === "POST" && c.url.endsWith("/users/42/collections")
+				? json(200, {
+						successful: { "0": { key: "OK1", version: 1, data: { name: "A" } } },
+						unchanged: {},
+						failed: { "1": { code: 400, message: "invalid parentCollection" } },
+					})
+				: undefined,
+		);
+		await assert.rejects(() => createCollections(CFG, [{ name: "A" }, { name: "B" }]), /invalid parentCollection/);
 		handle.restore();
 	});
 

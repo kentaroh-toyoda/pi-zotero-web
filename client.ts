@@ -241,7 +241,7 @@ export async function createCollections(
 		headers: { "Content-Type": "application/json", "Zotero-Write-Token": token },
 		body: JSON.stringify(collections),
 	});
-	return (await res.json()) as ZoteroCollection[];
+	return parseWriteResponse<ZoteroCollection>((await res.json()) as ZoteroWriteResponse);
 }
 
 /** Patch a collection (e.g. rename). `version` is the current collection version. */
@@ -358,15 +358,48 @@ export async function exportItems(
 	return res.text();
 }
 
-/** Create one or more items. Returns the created items with key/version.
- *
- * The Zotero Web API responds to `POST /items` with a multi-object write
- * response object (not an array):
- *   { successful: { "0": <saved object>, ... }, success: { "0": "<key>" },
- *     unchanged: {}, failed: { "1": { code, message, ... } } }
- * We extract the `successful` entries in submission order and throw if any
- * writes failed, so callers get a plain array of created items.
+/** Minimal shape shared by saved items and collections. */
+interface ZoteroObject {
+	key: string;
+	version: number;
+	data: Record<string, unknown>;
+}
+
+/**
+ * Response to a multi-object write (POST of a JSON array of objects).
+ * The Zotero Web API answers 200 with this object — not an array:
+ *   { successful: { "0": <saved object>, ... }, unchanged: { ... },
+ *     failed: { "1": { key, code, message, ... } } }
+ * (see https://www.zotero.org/support/dev/web_api/v3/write_requests).
  */
+interface ZoteroWriteResponse {
+	successful?: Record<string, ZoteroObject>;
+	unchanged?: Record<string, unknown>;
+	failed?: Record<string, { key?: string; code?: number; message?: string }>;
+}
+
+/**
+ * Extract the created objects from a multi-object write response: `successful`
+ * entries in submission order (keys are the numeric string indices of the
+ * submitted array, sorted numerically to match the input order). Throws if any
+ * individual write failed, so callers get a plain array of created objects.
+ */
+function parseWriteResponse<T extends ZoteroObject>(json: ZoteroWriteResponse): T[] {
+	const failed = json.failed ?? {};
+	const failedEntries = Object.entries(failed);
+	if (failedEntries.length > 0) {
+		const details = failedEntries
+			.map(([i, e]) => `index ${i}: ${e?.code ?? "?"} ${e?.message ?? ""}`.trim())
+			.join("; ");
+		throw new Error(`Zotero create failed for ${failedEntries.length} object(s) — ${details}`);
+	}
+	const successful = json.successful ?? {};
+	return Object.keys(successful)
+		.sort((a, b) => Number(a) - Number(b))
+		.map((i) => successful[i]! as T);
+}
+
+/** Create one or more items. Returns the created items with key/version. */
 export async function createItems(
 	cfg: ZoteroConfig,
 	items: Record<string, unknown>[],
@@ -382,24 +415,7 @@ export async function createItems(
 		},
 		body: JSON.stringify(items),
 	});
-	const json = (await res.json()) as {
-		successful?: Record<string, ZoteroItem>;
-		failed?: Record<string, { code?: number; message?: string }>;
-	};
-	const failed = json.failed ?? {};
-	const failedEntries = Object.entries(failed);
-	if (failedEntries.length > 0) {
-		const details = failedEntries
-			.map(([i, e]) => `index ${i}: ${e?.code ?? "?"} ${e?.message ?? ""}`.trim())
-			.join("; ");
-		throw new Error(`Zotero create failed for ${failedEntries.length} item(s) — ${details}`);
-	}
-	// `successful` keys are the numeric string indices of the submitted array;
-	// sort numerically so the returned order matches the input order.
-	const successful = json.successful ?? {};
-	return Object.keys(successful)
-		.sort((a, b) => Number(a) - Number(b))
-		.map((i) => successful[i]!);
+	return parseWriteResponse<ZoteroItem>((await res.json()) as ZoteroWriteResponse);
 }
 
 /** Patch an item's fields. `version` is the current item version (If-Unmodified-Since-Version). */
